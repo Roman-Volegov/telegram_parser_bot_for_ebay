@@ -70,7 +70,7 @@ def parse_price_text(text: str) -> tuple[float | None, str | None]:
         return None, None
     currency = None
     upper = text.upper()
-    if "US $" in text or text.strip().startswith("$") or "USD" in upper:
+    if "US $" in text or "$" in text or "USD" in upper:
         currency = "USD"
     elif "€" in text or "EUR" in upper:
         currency = "EUR"
