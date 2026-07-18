@@ -35,6 +35,10 @@ class Listing:
     image_url: str | None
     item_url: str
     source: Source
+    shipping_cost: float | None = None
+    shipping_currency: str | None = None
+    shipping_free: bool = False
+    listing_type: str | None = None  # eBay: Buy It Now / Аукцион / …
 
     @property
     def price_label(self) -> str:
@@ -43,6 +47,17 @@ class Listing:
         if self.currency:
             return f"{self.price:.2f} {self.currency}"
         return f"{self.price:.2f}"
+
+    @property
+    def shipping_label(self) -> str:
+        if self.shipping_free:
+            return "бесплатно"
+        if self.shipping_cost is None:
+            return "не указана"
+        currency = self.shipping_currency or self.currency or ""
+        if currency:
+            return f"{self.shipping_cost:.2f} {currency}"
+        return f"{self.shipping_cost:.2f}"
 
 
 @dataclass(slots=True)

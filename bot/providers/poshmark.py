@@ -14,6 +14,7 @@ from bot.providers.http_utils import (
     request_with_retries,
     truncate,
 )
+from bot.providers.listing_meta import parse_shipping_info
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,7 @@ class PoshmarkProvider(BaseProvider):
             if search.max_price is not None and price is not None and price > search.max_price:
                 continue
             image_url = _extract_image(anchor)
+            ship_cost, ship_cur, ship_free = _extract_shipping_near(anchor)
             absolute = href if href.startswith("http") else f"https://poshmark.com{href}"
             seen.add(item_id)
             listings.append(
@@ -79,6 +81,9 @@ class PoshmarkProvider(BaseProvider):
                     image_url=image_url,
                     item_url=absolute.split("?")[0],
                     source=Source.POSHMARK,
+                    shipping_cost=ship_cost,
+                    shipping_currency=ship_cur or currency or "USD",
+                    shipping_free=ship_free,
                 )
             )
             if len(listings) >= limit:
@@ -136,3 +141,18 @@ def _extract_image(anchor) -> str | None:
     if not image:
         return None
     return image.get("src") or image.get("data-src")
+
+
+def _extract_shipping_near(anchor) -> tuple[float | None, str | None, bool]:
+    container = anchor
+    for _ in range(5):
+        if container is None:
+            break
+        text = container.get_text(" ", strip=True)
+        lower = text.lower()
+        if "ship" in lower or "достав" in lower:
+            cost, currency, is_free = parse_shipping_info(text)
+            if is_free or cost is not None:
+                return cost, currency, is_free
+        container = container.parent
+    return None, None, False

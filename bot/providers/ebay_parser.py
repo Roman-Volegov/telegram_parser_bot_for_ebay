@@ -15,6 +15,7 @@ from bot.providers.http_utils import (
     request_with_retries,
     truncate,
 )
+from bot.providers.listing_meta import parse_ebay_html_listing_type, parse_shipping_info
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,10 @@ class EbayParserProvider(BaseProvider):
             summary = getattr(entry, "summary", "") or getattr(entry, "description", "") or ""
             price, currency = _extract_price_from_summary(summary)
             image_url = _extract_image_from_summary(summary)
-            description = truncate(f"{title}. {_strip_html(summary)}", 450)
+            plain = _strip_html(summary)
+            ship_cost, ship_cur, ship_free = parse_shipping_info(plain)
+            listing_type = parse_ebay_html_listing_type(plain)
+            description = truncate(f"{title}. {plain}", 450)
             listings.append(
                 Listing(
                     id=item_id,
@@ -85,6 +89,10 @@ class EbayParserProvider(BaseProvider):
                     image_url=image_url,
                     item_url=link.split("?")[0],
                     source=Source.EBAY_PARSER,
+                    shipping_cost=ship_cost,
+                    shipping_currency=ship_cur,
+                    shipping_free=ship_free,
+                    listing_type=listing_type,
                 )
             )
         return listings
@@ -115,11 +123,30 @@ class EbayParserProvider(BaseProvider):
                 continue
             price_el = item.select_one(".s-item__price")
             subtitle_el = item.select_one(".s-item__subtitle")
+            shipping_el = item.select_one(
+                ".s-item__shipping, .s-item__logisticsCost, .s-item__freeXDays"
+            )
+            format_el = item.select_one(
+                ".s-item__purchaseOptions, .s-item__dynamic, .s-item__listingDate"
+            )
+            bids_el = item.select_one(".s-item__bids, .s-item__bidCount")
             image_el = item.select_one("img")
             price, currency = parse_price_text(
                 price_el.get_text(" ", strip=True) if price_el else ""
             )
             subtitle = subtitle_el.get_text(" ", strip=True) if subtitle_el else ""
+            ship_text = shipping_el.get_text(" ", strip=True) if shipping_el else ""
+            ship_cost, ship_cur, ship_free = parse_shipping_info(ship_text)
+            type_bits = " ".join(
+                part
+                for part in [
+                    format_el.get_text(" ", strip=True) if format_el else "",
+                    bids_el.get_text(" ", strip=True) if bids_el else "",
+                    item.get_text(" ", strip=True),
+                ]
+                if part
+            )
+            listing_type = parse_ebay_html_listing_type(type_bits)
             description = truncate(f"{title}. {subtitle}".strip(". "), 450)
             listings.append(
                 Listing(
@@ -131,6 +158,10 @@ class EbayParserProvider(BaseProvider):
                     image_url=image_el.get("src") if image_el else None,
                     item_url=href.split("?")[0],
                     source=Source.EBAY_PARSER,
+                    shipping_cost=ship_cost,
+                    shipping_currency=ship_cur or currency,
+                    shipping_free=ship_free,
+                    listing_type=listing_type,
                 )
             )
         return listings

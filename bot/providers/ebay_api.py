@@ -10,6 +10,7 @@ import httpx
 from bot.models import Listing, Search, Source
 from bot.providers.base import BaseProvider, ProviderError
 from bot.providers.http_utils import build_client, truncate
+from bot.providers.listing_meta import format_ebay_listing_type, shipping_from_ebay_api
 
 logger = logging.getLogger(__name__)
 
@@ -153,8 +154,18 @@ class EbayApiProvider(BaseProvider):
         if short:
             description = f"{title}. {short}"
 
-        # Дозапрос описания/картинки при необходимости
-        if (not image or not short) and item.get("itemId"):
+        shipping_cost, shipping_currency, shipping_free = shipping_from_ebay_api(item)
+        listing_type = format_ebay_listing_type(item.get("buyingOptions"))
+        detail = None
+
+        # Дозапрос описания/картинки/доставки при необходимости
+        need_detail = bool(item.get("itemId")) and (
+            not image
+            or not short
+            or (shipping_cost is None and not shipping_free)
+            or not listing_type
+        )
+        if need_detail:
             detail = await self._get_item(token, str(item["itemId"]))
             if detail:
                 if not image:
@@ -166,6 +177,12 @@ class EbayApiProvider(BaseProvider):
                     description = f"{title}. {clean}" if clean else title
                 if not url:
                     url = detail.get("itemWebUrl") or url
+                if shipping_cost is None and not shipping_free:
+                    shipping_cost, shipping_currency, shipping_free = shipping_from_ebay_api(
+                        detail
+                    )
+                if not listing_type:
+                    listing_type = format_ebay_listing_type(detail.get("buyingOptions"))
 
         return Listing(
             id=item_id,
@@ -176,6 +193,10 @@ class EbayApiProvider(BaseProvider):
             image_url=image,
             item_url=url,
             source=Source.EBAY_API,
+            shipping_cost=shipping_cost,
+            shipping_currency=shipping_currency,
+            shipping_free=shipping_free,
+            listing_type=listing_type,
         )
 
     async def _get_item(self, token: str, item_id: str) -> dict | None:
