@@ -7,6 +7,7 @@ from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject, Update
 
 from bot.db import Database
+from bot.menu import Btn
 from bot.models import UserStatus
 
 
@@ -70,7 +71,13 @@ class AccessMiddleware(BaseMiddleware):
         if command in self.PUBLIC_COMMANDS:
             return await handler(event, data)
 
-        if command in self.ADMIN_COMMANDS or callback_data.startswith("admin:"):
+        is_admin_action = (
+            command in self.ADMIN_COMMANDS
+            or text == Btn.ADMIN_USERS
+            or callback_data.startswith("admin:")
+            or callback_data.startswith("adminpanel:")
+        )
+        if is_admin_action:
             if user.id not in self.admin_ids:
                 if message:
                     await message.answer("Команда только для админа.")

@@ -7,6 +7,7 @@ from aiogram.types import Message
 from bot.config import Settings
 from bot.db import Database
 from bot.keyboards import admin_review_kb
+from bot.menu import main_menu_kb, remove_menu_kb
 from bot.models import UserStatus
 
 router = Router(name="start")
@@ -31,21 +32,28 @@ async def cmd_start(message: Message, bot: Bot, db: Database, settings: Settings
         assert user is not None
         created = False
 
+    is_admin = message.from_user.id in settings.admin_ids
+
     if user.status is UserStatus.BLOCKED:
-        await message.answer("Доступ заблокирован.")
+        await message.answer("Доступ заблокирован.", reply_markup=remove_menu_kb())
         return
     if user.status is UserStatus.REJECTED:
-        await message.answer("Заявка отклонена. Обратитесь к администратору.")
+        await message.answer(
+            "Заявка отклонена. Обратитесь к администратору.",
+            reply_markup=remove_menu_kb(),
+        )
         return
     if user.status is UserStatus.APPROVED:
+        kb = main_menu_kb(is_admin=is_admin)
         if user.setup_completed:
             await message.answer(
-                "С возвращением!\n"
-                "Команды: /add /list /settings /help"
+                "С возвращением! Пользуйтесь кнопками меню ниже.",
+                reply_markup=kb,
             )
         else:
             await message.answer(
-                "Вы одобрены. Пройдите мастер настройки: /setup"
+                "Вы одобрены. Нажмите «⚙️ Настройки» или /setup.",
+                reply_markup=kb,
             )
         return
 
@@ -55,6 +63,7 @@ async def cmd_start(message: Message, bot: Bot, db: Database, settings: Settings
         "Статус: <b>pending</b>\n"
         "Как только вас одобрят — придёт уведомление.",
         parse_mode="HTML",
+        reply_markup=remove_menu_kb(),
     )
 
     if created:

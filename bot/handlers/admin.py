@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from bot.config import Settings
 from bot.db import Database
+from bot.keyboards import admin_user_actions_kb, admin_users_filter_kb
+from bot.menu import Btn, main_menu_kb, remove_menu_kb
 from bot.models import UserStatus
 
 router = Router(name="admin")
@@ -19,8 +23,37 @@ def _format_user_line(user) -> str:
     )
 
 
+async def _send_users_list(
+    message: Message,
+    db: Database,
+    *,
+    status: UserStatus | None,
+) -> None:
+    users = await db.list_users(status=status)
+    if not users:
+        await message.answer(
+            "Пользователей нет.",
+            reply_markup=admin_users_filter_kb(),
+        )
+        return
+    title = f"Пользователи ({status.value if status else 'все'}):"
+    await message.answer(title, reply_markup=admin_users_filter_kb())
+    for user in users[:40]:
+        await message.answer(
+            _format_user_line(user),
+            parse_mode="HTML",
+            reply_markup=admin_user_actions_kb(user.telegram_id, user.status),
+        )
+
+
 @router.message(Command("users"))
-async def cmd_users(message: Message, db: Database, command: CommandObject) -> None:
+async def cmd_users(
+    message: Message,
+    db: Database,
+    command: CommandObject,
+    state: FSMContext,
+) -> None:
+    await state.clear()
     status = None
     if command.args:
         raw = command.args.strip().lower()
@@ -29,22 +62,26 @@ async def cmd_users(message: Message, db: Database, command: CommandObject) -> N
         except ValueError:
             await message.answer("Статус: pending|approved|rejected|blocked")
             return
-    users = await db.list_users(status=status)
-    if not users:
-        await message.answer("Пользователей нет.")
-        return
-    chunks: list[str] = []
-    buf = "Пользователи:\n\n"
-    for user in users[:100]:
-        line = _format_user_line(user) + "\n\n"
-        if len(buf) + len(line) > 3500:
-            chunks.append(buf)
-            buf = ""
-        buf += line
-    if buf:
-        chunks.append(buf)
-    for chunk in chunks:
-        await message.answer(chunk, parse_mode="HTML")
+    await _send_users_list(message, db, status=status)
+
+
+@router.message(F.text == Btn.ADMIN_USERS)
+async def cmd_users_button(
+    message: Message,
+    db: Database,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    await _send_users_list(message, db, status=None)
+
+
+@router.callback_query(F.data.startswith("adminpanel:users:"))
+async def admin_users_filter(callback: CallbackQuery, db: Database) -> None:
+    raw = (callback.data or "").split(":")[-1]
+    status = None if raw == "all" else UserStatus(raw)
+    if callback.message:
+        await _send_users_list(callback.message, db, status=status)
+    await callback.answer()
 
 
 async def _set_status_and_notify(
@@ -54,6 +91,7 @@ async def _set_status_and_notify(
     status: UserStatus,
     *,
     actor_chat,
+    settings: Settings,
 ) -> None:
     user = await db.set_user_status(telegram_id, status)
     if user is None:
@@ -63,58 +101,95 @@ async def _set_status_and_notify(
         f"Статус {telegram_id}: <b>{status.value}</b>",
         parse_mode="HTML",
     )
-    texts = {
-        UserStatus.APPROVED: (
-            "✅ Заявка одобрена.\nПройдите мастер настройки: /setup"
-        ),
-        UserStatus.REJECTED: "❌ Заявка отклонена.",
-        UserStatus.BLOCKED: "🚫 Доступ заблокирован.",
-        UserStatus.PENDING: "Статус снова pending.",
-    }
+    is_admin = telegram_id in settings.admin_ids
+    if status is UserStatus.APPROVED:
+        text = "✅ Заявка одобрена.\nНажмите «⚙️ Настройки» для мастера настройки."
+        markup = main_menu_kb(is_admin=is_admin)
+    elif status is UserStatus.REJECTED:
+        text = "❌ Заявка отклонена."
+        markup = remove_menu_kb()
+    elif status is UserStatus.BLOCKED:
+        text = "🚫 Доступ заблокирован."
+        markup = remove_menu_kb()
+    else:
+        text = "Статус снова pending."
+        markup = remove_menu_kb()
     try:
-        await bot.send_message(telegram_id, texts[status])
+        await bot.send_message(telegram_id, text, reply_markup=markup)
     except Exception:
         pass
 
 
 @router.message(Command("approve"))
 async def cmd_approve(
-    message: Message, bot: Bot, db: Database, command: CommandObject
+    message: Message,
+    bot: Bot,
+    db: Database,
+    command: CommandObject,
+    settings: Settings,
 ) -> None:
     if not command.args or not command.args.strip().isdigit():
         await message.answer("Формат: /approve <telegram_id>")
         return
     await _set_status_and_notify(
-        bot, db, int(command.args.strip()), UserStatus.APPROVED, actor_chat=message
+        bot,
+        db,
+        int(command.args.strip()),
+        UserStatus.APPROVED,
+        actor_chat=message,
+        settings=settings,
     )
 
 
 @router.message(Command("reject"))
 async def cmd_reject(
-    message: Message, bot: Bot, db: Database, command: CommandObject
+    message: Message,
+    bot: Bot,
+    db: Database,
+    command: CommandObject,
+    settings: Settings,
 ) -> None:
     if not command.args or not command.args.strip().isdigit():
         await message.answer("Формат: /reject <telegram_id>")
         return
     await _set_status_and_notify(
-        bot, db, int(command.args.strip()), UserStatus.REJECTED, actor_chat=message
+        bot,
+        db,
+        int(command.args.strip()),
+        UserStatus.REJECTED,
+        actor_chat=message,
+        settings=settings,
     )
 
 
 @router.message(Command("block"))
 async def cmd_block(
-    message: Message, bot: Bot, db: Database, command: CommandObject
+    message: Message,
+    bot: Bot,
+    db: Database,
+    command: CommandObject,
+    settings: Settings,
 ) -> None:
     if not command.args or not command.args.strip().isdigit():
         await message.answer("Формат: /block <telegram_id>")
         return
     await _set_status_and_notify(
-        bot, db, int(command.args.strip()), UserStatus.BLOCKED, actor_chat=message
+        bot,
+        db,
+        int(command.args.strip()),
+        UserStatus.BLOCKED,
+        actor_chat=message,
+        settings=settings,
     )
 
 
 @router.callback_query(F.data.startswith("admin:"))
-async def admin_callbacks(callback: CallbackQuery, bot: Bot, db: Database) -> None:
+async def admin_callbacks(
+    callback: CallbackQuery,
+    bot: Bot,
+    db: Database,
+    settings: Settings,
+) -> None:
     parts = (callback.data or "").split(":")
     if len(parts) != 3:
         await callback.answer("Некорректные данные")
@@ -134,7 +209,12 @@ async def admin_callbacks(callback: CallbackQuery, bot: Bot, db: Database) -> No
         await callback.answer("Неизвестное действие")
         return
     await _set_status_and_notify(
-        bot, db, telegram_id, status, actor_chat=callback.message
+        bot,
+        db,
+        telegram_id,
+        status,
+        actor_chat=callback.message,
+        settings=settings,
     )
     await callback.answer("Готово")
     if callback.message:

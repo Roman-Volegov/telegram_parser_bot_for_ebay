@@ -14,6 +14,7 @@ from bot.config import get_settings
 from bot.crypto import CredentialsCrypto
 from bot.db import Database
 from bot.handlers import build_root_router
+from bot.menu import setup_bot_commands
 from bot.middlewares import AccessMiddleware, InjectMiddleware
 from bot.services.cleanup import CleanupService
 from bot.services.credentials import CredentialsService
@@ -71,6 +72,7 @@ async def main() -> None:
 
     poller.start()
     cleanup.start()
+    await setup_bot_commands(bot, settings.admin_ids)
     logger.info(
         "Starting bot+web (poll=%ss, web=%s:%s)",
         settings.poll_interval_sec,

@@ -7,7 +7,14 @@ from aiogram.types import CallbackQuery, Message
 
 from bot.config import Settings
 from bot.db import Database
-from bot.keyboards import marketplace_kb, setup_confirm_kb, sources_multiselect_kb
+from bot.keyboards import (
+    confirm_revoke_keys_kb,
+    keys_actions_kb,
+    marketplace_kb,
+    setup_confirm_kb,
+    sources_multiselect_kb,
+)
+from bot.menu import Btn, main_menu_kb
 from bot.models import SOURCE_LABELS, Source, User
 from bot.providers.ebay_api import EbayApiProvider
 from bot.services.credentials import CredentialsService
@@ -38,6 +45,7 @@ def _selected_from_data(data: dict) -> set[Source]:
 
 @router.message(Command("setup"))
 @router.message(Command("settings"))
+@router.message(F.text == Btn.SETUP)
 async def cmd_setup(
     message: Message,
     state: FSMContext,
@@ -236,26 +244,92 @@ async def setup_save(
                 "Укажите их в developer.ebay.com для Production keyset.",
             ]
         )
-    text_parts.extend(["", "Дальше создайте поиск: /add"])
+    text_parts.extend(["", "Дальше нажмите «➕ Новый поиск»."])
     await state.clear()
-    await callback.message.answer("\n".join(text_parts), parse_mode="HTML")
+    is_admin = (
+        callback.from_user is not None
+        and callback.from_user.id in settings.admin_ids
+    )
+    await callback.message.answer(
+        "\n".join(text_parts),
+        parse_mode="HTML",
+        reply_markup=main_menu_kb(is_admin=is_admin),
+    )
     await callback.answer("Сохранено")
 
 
 @router.message(Command("keys_status"))
+@router.message(F.text == Btn.KEYS)
 async def cmd_keys_status(
-    message: Message, credentials: CredentialsService, user: User
+    message: Message,
+    credentials: CredentialsService,
+    user: User,
+    state: FSMContext,
 ) -> None:
+    await state.clear()
     text = await credentials.keys_status_text(user.telegram_id)
-    await message.answer(text)
+    await message.answer(text, reply_markup=keys_actions_kb())
 
 
 @router.message(Command("revoke_keys"))
+@router.message(F.text == Btn.REVOKE_KEYS)
 async def cmd_revoke_keys(
-    message: Message, credentials: CredentialsService, user: User
+    message: Message,
+    user: User,
+    state: FSMContext,
+) -> None:
+    await state.clear()
+    await message.answer(
+        "Удалить сохранённые eBay API ключи?",
+        reply_markup=confirm_revoke_keys_kb(),
+    )
+
+
+@router.callback_query(F.data == "keys:revoke_ask")
+async def keys_revoke_ask(callback: CallbackQuery) -> None:
+    await callback.message.answer(
+        "Удалить сохранённые eBay API ключи?",
+        reply_markup=confirm_revoke_keys_kb(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "keys:revoke_yes")
+async def keys_revoke_yes(
+    callback: CallbackQuery,
+    credentials: CredentialsService,
+    user: User,
 ) -> None:
     removed = await credentials.revoke(user.telegram_id)
-    if removed:
-        await message.answer("Ключи eBay API удалены. При необходимости пройдите /setup.")
-    else:
-        await message.answer("Сохранённых ключей не было.")
+    text = (
+        "Ключи eBay API удалены. При необходимости откройте «⚙️ Настройки»."
+        if removed
+        else "Сохранённых ключей не было."
+    )
+    await callback.message.answer(text)
+    await callback.answer("Готово")
+
+
+@router.callback_query(F.data == "keys:revoke_no")
+async def keys_revoke_no(callback: CallbackQuery) -> None:
+    await callback.message.answer("Отменено.")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "keys:goto_setup")
+async def keys_goto_setup(
+    callback: CallbackQuery,
+    state: FSMContext,
+    user: User,
+) -> None:
+    await callback.answer()
+    # Переиспользуем тот же поток, что и кнопка настроек
+    fake = callback.message
+    await state.clear()
+    selected = set(user.enabled_sources)
+    await state.set_state(SetupStates.choose_sources)
+    await state.update_data(sources=[s.value for s in selected])
+    await fake.answer(
+        "Мастер настройки.\nВыберите источники (можно несколько):",
+        reply_markup=sources_multiselect_kb(selected),
+    )

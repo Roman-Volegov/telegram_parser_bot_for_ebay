@@ -1,33 +1,44 @@
 from __future__ import annotations
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
+from bot.config import Settings
+from bot.menu import Btn, main_menu_kb
 from bot.models import User
 
 router = Router(name="common")
 
 HELP_TEXT = """
-<b>Команды пользователя</b>
-/setup или /settings — мастер источников и ключей
-/add — новый поиск
-/list — список поисков
-/edit &lt;id&gt; — изменить поиск
-/pause &lt;id&gt; / /resume &lt;id&gt;
-/delete &lt;id&gt;
-/keys_status — статус ключей eBay API
-/revoke_keys — удалить ключи
-/help — справка
+<b>Меню пользователя</b>
+➕ Новый поиск — создать мониторинг
+📋 Мои поиски — список и управление
+⚙️ Настройки — источники и ключи eBay
+🔑 Ключи API — статус / отзыв ключей
+❓ Справка — это сообщение
+🏠 Меню — показать кнопки снова
 
-<b>Команды админа</b>
-/users [status]
-/approve &lt;telegram_id&gt;
-/reject &lt;telegram_id&gt;
-/block &lt;telegram_id&gt;
+Также доступны команды в меню слева от поля ввода (/add, /list, /setup…).
+
+<b>Админ</b>
+👥 Пользователи — заявки и статусы
 """.strip()
 
 
 @router.message(Command("help"))
-async def cmd_help(message: Message, user: User | None = None) -> None:
-    await message.answer(HELP_TEXT, parse_mode="HTML")
+@router.message(F.text == Btn.HELP)
+async def cmd_help(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    user: User | None = None,
+) -> None:
+    await state.clear()
+    is_admin = message.from_user is not None and message.from_user.id in settings.admin_ids
+    await message.answer(
+        HELP_TEXT,
+        parse_mode="HTML",
+        reply_markup=main_menu_kb(is_admin=is_admin),
+    )

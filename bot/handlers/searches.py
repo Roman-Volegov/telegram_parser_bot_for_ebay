@@ -8,7 +8,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from bot.db import Database
-from bot.keyboards import add_source_kb, confirm_search_kb, skip_filters_kb
+from bot.keyboards import (
+    add_source_kb,
+    confirm_delete_search_kb,
+    confirm_search_kb,
+    searches_manage_kb,
+    skip_filters_kb,
+)
+from bot.menu import Btn
 from bot.models import SOURCE_LABELS, Search, Source, User
 from bot.services.poller import PollerService
 from bot.states import AddSearchStates, EditSearchStates
@@ -64,9 +71,10 @@ def _format_search(search: Search) -> str:
 
 
 @router.message(Command("add"))
+@router.message(F.text == Btn.ADD)
 async def cmd_add(message: Message, state: FSMContext, user: User) -> None:
     if not user.setup_completed or not user.enabled_sources:
-        await message.answer("Сначала завершите /setup")
+        await message.answer("Сначала завершите настройку («⚙️ Настройки»).")
         return
     await state.clear()
     await state.set_state(AddSearchStates.choose_source)
@@ -203,14 +211,95 @@ async def add_confirm(
 
 
 @router.message(Command("list"))
-async def cmd_list(message: Message, db: Database, user: User) -> None:
+@router.message(F.text == Btn.LIST)
+async def cmd_list(
+    message: Message,
+    db: Database,
+    user: User,
+    state: FSMContext,
+) -> None:
+    await state.clear()
     searches = await db.list_searches(user.telegram_id)
     if not searches:
-        await message.answer("Поисков нет. Создайте через /add")
+        await message.answer("Поисков нет. Нажмите «➕ Новый поиск».")
         return
     text = "Ваши поиски:\n\n" + "\n\n".join(_format_search(s) for s in searches)
-    text += "\n\n/pause /resume /delete /edit — с id"
-    await message.answer(text, parse_mode="HTML")
+    text += "\n\nУправление кнопками ниже:"
+    await message.answer(
+        text,
+        parse_mode="HTML",
+        reply_markup=searches_manage_kb(searches),
+    )
+
+
+@router.callback_query(F.data.startswith("search:toggle:"))
+async def search_toggle(callback: CallbackQuery, db: Database, user: User) -> None:
+    search_id = int((callback.data or "").split(":")[-1])
+    search = await db.get_search(search_id)
+    if search is None or search.telegram_id != user.telegram_id:
+        await callback.answer("Не найден", show_alert=True)
+        return
+    await db.set_search_paused(search_id, user.telegram_id, not search.paused)
+    searches = await db.list_searches(user.telegram_id)
+    text = "Ваши поиски:\n\n" + "\n\n".join(_format_search(s) for s in searches)
+    await callback.message.edit_text(
+        text + "\n\nУправление кнопками ниже:",
+        parse_mode="HTML",
+        reply_markup=searches_manage_kb(searches),
+    )
+    await callback.answer("⏸ Пауза" if not search.paused else "▶️ Включено")
+
+
+@router.callback_query(F.data.startswith("search:edit:"))
+async def search_edit_cb(
+    callback: CallbackQuery,
+    state: FSMContext,
+    db: Database,
+    user: User,
+) -> None:
+    search_id = int((callback.data or "").split(":")[-1])
+    search = await db.get_search(search_id)
+    if search is None or search.telegram_id != user.telegram_id:
+        await callback.answer("Не найден", show_alert=True)
+        return
+    await state.set_state(EditSearchStates.keywords)
+    await state.update_data(edit_id=search_id)
+    await callback.message.answer(
+        f"Редактирование #{search_id}.\n"
+        f"Текущий запрос: <code>{search.keywords}</code>\n\n"
+        "Отправьте новые keywords (или «-» чтобы оставить):",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("search:askdel:"))
+async def search_del_ask(callback: CallbackQuery, db: Database, user: User) -> None:
+    search_id = int((callback.data or "").split(":")[-1])
+    search = await db.get_search(search_id)
+    if search is None or search.telegram_id != user.telegram_id:
+        await callback.answer("Не найден", show_alert=True)
+        return
+    await callback.message.answer(
+        f"Удалить поиск #{search_id}?\n{_format_search(search)}",
+        parse_mode="HTML",
+        reply_markup=confirm_delete_search_kb(search_id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("search:delyes:"))
+async def search_del_yes(callback: CallbackQuery, db: Database, user: User) -> None:
+    search_id = int((callback.data or "").split(":")[-1])
+    ok = await db.delete_search(search_id, user.telegram_id)
+    await callback.message.answer("🗑 Удалено." if ok else "Поиск не найден.")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "search:delno")
+async def search_del_no(callback: CallbackQuery) -> None:
+    await callback.message.answer("Удаление отменено.")
+    await callback.answer()
 
 
 @router.message(Command("pause"))
