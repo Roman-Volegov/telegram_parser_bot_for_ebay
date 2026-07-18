@@ -203,7 +203,7 @@ async def add_confirm(
         "Делаю тихий первый прогон (без спама старыми лотами)…",
         parse_mode="HTML",
     )
-    await poller.process_search(search, notify=False)
+    await poller.process_search(search, notify=False, record_log=False)
     await callback.message.answer(
         f"✅ Поиск #{search.id} готов. Новые лоты будут приходить в этот чат."
     )

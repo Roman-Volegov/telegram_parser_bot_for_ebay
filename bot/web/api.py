@@ -165,7 +165,8 @@ def create_api_router(
             buy_it_now=payload.buy_it_now,
         )
         if poller is not None:
-            await poller.process_search(search, notify=False)
+            # Не пишем в лог опросов — там только снимок последнего цикла poller'а
+            await poller.process_search(search, notify=False, record_log=False)
         return {"id": search.id, "ok": True}
 
     @router.patch("/searches/{search_id}")

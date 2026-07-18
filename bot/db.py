@@ -458,6 +458,14 @@ class Database:
 
     # --- poll logs ---
 
+    async def clear_poll_logs(self, telegram_id: int) -> None:
+        """Удаляет все записи лога опросов пользователя (перед новым циклом)."""
+        await self.conn.execute(
+            "DELETE FROM poll_logs WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        await self.conn.commit()
+
     async def add_poll_log(
         self,
         telegram_id: int,
@@ -470,7 +478,6 @@ class Database:
         new_items: int = 0,
         notified: int = 0,
         message: str | None = None,
-        keep_last: int = 100,
     ) -> None:
         await self.conn.execute(
             """
@@ -492,28 +499,14 @@ class Database:
                 _utcnow(),
             ),
         )
-        # Храним только последние N записей пользователя
-        await self.conn.execute(
-            """
-            DELETE FROM poll_logs
-            WHERE telegram_id = ?
-              AND id NOT IN (
-                SELECT id FROM poll_logs
-                WHERE telegram_id = ?
-                ORDER BY id DESC
-                LIMIT ?
-              )
-            """,
-            (telegram_id, telegram_id, keep_last),
-        )
         await self.conn.commit()
 
-    async def list_poll_logs(self, telegram_id: int, *, limit: int = 40) -> list[PollLog]:
+    async def list_poll_logs(self, telegram_id: int, *, limit: int = 100) -> list[PollLog]:
         cursor = await self.conn.execute(
             """
             SELECT * FROM poll_logs
             WHERE telegram_id = ?
-            ORDER BY id DESC
+            ORDER BY id ASC
             LIMIT ?
             """,
             (telegram_id, limit),
