@@ -1,13 +1,18 @@
 :root {
-  color-scheme: light dark;
-  --bg: var(--tg-theme-bg-color, #0f1419);
-  --text: var(--tg-theme-text-color, #f4f7f5);
-  --hint: var(--tg-theme-hint-color, #8b9a94);
-  --button: var(--tg-theme-button-color, #1f8a70);
-  --button-text: var(--tg-theme-button-text-color, #ffffff);
-  --secondary: var(--tg-theme-secondary-bg-color, #1a2220);
-  --danger: #d9534f;
-  --ok: #2f9e6b;
+  color-scheme: dark;
+  --bg: #1a1a1a;
+  --bg-elevated: #242424;
+  --secondary: #2c2c2c;
+  --text: #ffffff;
+  --hint: #b0b0b0;
+  --gold: #c9a227;
+  --gold-soft: #d4af37;
+  --gold-dim: #8a7020;
+  --button: #c9a227;
+  --button-text: #1a1a1a;
+  --danger: #c45c5c;
+  --ok: #c9a227;
+  --border: #3a3a3a;
   --radius: 16px;
   --font: "Segoe UI", "SF Pro Text", "Helvetica Neue", sans-serif;
 }
@@ -22,8 +27,9 @@ html, body {
 }
 body {
   background:
-    radial-gradient(1200px 500px at 10% -10%, color-mix(in srgb, var(--button) 22%, transparent), transparent),
-    var(--bg);
+    radial-gradient(900px 420px at 12% -8%, rgba(201, 162, 39, 0.14), transparent 55%),
+    radial-gradient(700px 360px at 100% 0%, rgba(255, 255, 255, 0.04), transparent 50%),
+    linear-gradient(180deg, #1f1f1f 0%, #151515 100%);
 }
 #app {
   max-width: 560px;
@@ -39,9 +45,9 @@ body {
 }
 .eyebrow {
   margin: 0;
-  color: var(--hint);
+  color: var(--gold-soft);
   font-size: 12px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 h1 {
@@ -49,6 +55,7 @@ h1 {
   font-size: 24px;
   line-height: 1.2;
   font-weight: 700;
+  color: var(--text);
 }
 .tabs {
   display: grid;
@@ -63,15 +70,16 @@ h1 {
 }
 .tab {
   background: var(--secondary);
-  color: var(--text);
+  color: var(--hint);
   border-radius: 999px;
   padding: 10px 12px;
-  opacity: 0.75;
+  border: 1px solid var(--border);
 }
 .tab.active {
-  background: color-mix(in srgb, var(--button) 85%, #000);
+  background: var(--gold);
   color: var(--button-text);
-  opacity: 1;
+  border-color: var(--gold);
+  font-weight: 650;
 }
 .panel { display: none; }
 .panel.active { display: block; animation: rise 0.25s ease; }
@@ -84,10 +92,12 @@ h1 {
   background: var(--secondary);
   border-radius: var(--radius);
   padding: 14px;
+  border: 1px solid var(--border);
 }
 .card h3 {
   margin: 0 0 6px;
   font-size: 16px;
+  color: var(--text);
 }
 .meta {
   color: var(--hint);
@@ -100,19 +110,25 @@ h1 {
   gap: 8px;
 }
 .chip, .icon-btn {
-  background: color-mix(in srgb, var(--bg) 55%, var(--secondary));
+  background: var(--bg-elevated);
   color: var(--text);
   border-radius: 999px;
   padding: 8px 12px;
   font-size: 13px;
+  border: 1px solid var(--border);
 }
-.chip.danger { color: #ffd7d5; background: color-mix(in srgb, var(--danger) 35%, var(--secondary)); }
+.chip.danger {
+  color: #fff;
+  background: rgba(196, 92, 92, 0.25);
+  border-color: rgba(196, 92, 92, 0.45);
+}
 .form {
   display: grid;
   gap: 12px;
   background: var(--secondary);
   border-radius: var(--radius);
   padding: 16px;
+  border: 1px solid var(--border);
 }
 label {
   display: grid;
@@ -122,12 +138,20 @@ label {
 }
 input, select {
   width: 100%;
-  border: 0;
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 12px;
   background: var(--bg);
   color: var(--text);
   font: inherit;
+}
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 2px rgba(201, 162, 39, 0.2);
+}
+input::placeholder {
+  color: #7a7a7a;
 }
 .row {
   display: grid;
@@ -140,20 +164,25 @@ input, select {
   gap: 8px;
   color: var(--text);
 }
-.check input { width: auto; }
+.check input { width: auto; accent-color: var(--gold); }
 .primary {
-  background: var(--button);
+  background: linear-gradient(180deg, var(--gold-soft) 0%, var(--gold) 100%);
   color: var(--button-text);
   border-radius: 14px;
   padding: 12px 16px;
-  font-weight: 650;
+  font-weight: 700;
+  border: 1px solid var(--gold-dim);
+}
+.primary:active {
+  filter: brightness(0.95);
 }
 .ghost {
   background: var(--secondary);
-  color: var(--text);
+  color: var(--gold-soft);
   width: 40px;
   height: 40px;
   border-radius: 12px;
+  border: 1px solid var(--border);
 }
 .sources { display: grid; gap: 8px; }
 .source-item {
@@ -167,6 +196,7 @@ input, select {
   color: var(--text);
   font-size: 14px;
   line-height: 1.3;
+  border: 1px solid var(--border);
 }
 .source-item input[type="checkbox"] {
   width: 18px !important;
@@ -174,7 +204,7 @@ input, select {
   min-width: 18px;
   margin: 0;
   flex: 0 0 18px;
-  accent-color: var(--button);
+  accent-color: var(--gold);
 }
 .source-item span {
   flex: 1 1 auto;
@@ -187,6 +217,8 @@ input, select {
   padding: 28px 16px;
   background: var(--secondary);
   border-radius: var(--radius);
+  border: 1px solid var(--border);
+  color: var(--hint);
 }
 .hidden { display: none !important; }
 .toast {
@@ -194,13 +226,14 @@ input, select {
   left: 50%;
   bottom: 24px;
   transform: translateX(-50%);
-  background: #12201c;
+  background: #111111;
   color: #fff;
+  border: 1px solid var(--gold-dim);
   padding: 10px 14px;
   border-radius: 12px;
   font-size: 14px;
   z-index: 20;
-  box-shadow: 0 10px 30px rgba(0,0,0,.25);
+  box-shadow: 0 10px 30px rgba(0,0,0,.45);
 }
 .error-screen {
   position: fixed;
@@ -218,21 +251,27 @@ input, select {
   font-size: 11px;
   padding: 3px 8px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--button) 25%, var(--secondary));
-  color: var(--text);
+  background: rgba(201, 162, 39, 0.18);
+  color: var(--gold-soft);
+  border: 1px solid rgba(201, 162, 39, 0.35);
   margin-right: 6px;
 }
-.badge.pause { background: color-mix(in srgb, #c79a2b 35%, var(--secondary)); }
+.badge.pause {
+  background: rgba(176, 176, 176, 0.15);
+  color: #e0e0e0;
+  border-color: rgba(176, 176, 176, 0.3);
+}
 .section-title {
   margin: 4px 0 0;
   font-size: 15px;
   font-weight: 700;
+  color: var(--gold-soft);
 }
 .ebay-block {
   display: grid;
   gap: 12px;
   padding-top: 4px;
-  border-top: 1px solid color-mix(in srgb, var(--hint) 25%, transparent);
+  border-top: 1px solid var(--border);
 }
 .checklist {
   margin: 0;
@@ -248,7 +287,9 @@ input, select {
   padding: 12px;
   border-radius: 12px;
   background: var(--bg);
+  border: 1px solid var(--border);
 }
 .deletion input[readonly] {
   opacity: 0.95;
+  color: var(--text);
 }

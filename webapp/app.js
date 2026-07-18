@@ -3,8 +3,12 @@
   if (tg) {
     tg.ready();
     tg.expand();
-    tg.setHeaderColor("secondary_bg_color");
-    tg.setBackgroundColor("bg_color");
+    try {
+      tg.setHeaderColor("#1a1a1a");
+      tg.setBackgroundColor("#1a1a1a");
+    } catch (_) {
+      // старые клиенты могут не принимать hex
+    }
   }
 
   const state = {
