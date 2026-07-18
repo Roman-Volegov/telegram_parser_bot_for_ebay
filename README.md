@@ -41,6 +41,21 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 python -m bot
 ```
 
+## Docker на VPS (рядом с другим ботом)
+
+Отдельный каталог и compose-проект — не пересекается с `~/cdek-bot`.
+
+```bash
+cd ~/ebay-poshmark-bot
+cp .env.example .env   # или отредактировать существующий .env
+# обязательны: TELEGRAM_BOT_TOKEN, ADMIN_TELEGRAM_IDS, CREDENTIALS_ENCRYPTION_KEY
+# PUBLIC_BASE_URL=http://<VPS_IP>:18080
+sudo docker compose up -d --build
+sudo docker compose logs -f
+```
+
+Хостовый порт webhook: **18080**. Контейнер: `ebay-poshmark-bot`.
+
 ## Команды
 
 **Пользователь:** `/start` `/setup` `/settings` `/add` `/list` `/edit` `/pause` `/resume` `/delete` `/keys_status` `/revoke_keys` `/help`
