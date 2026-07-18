@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from bot.db import Database
+from bot.services.credentials import CredentialsService
 from bot.services.poller import PollerService
 from bot.web.api import create_api_router
 from bot.web.deletion import create_deletion_router
@@ -19,18 +20,28 @@ def create_app(
     public_base_url: str,
     *,
     bot_token: str,
+    credentials: CredentialsService,
     poller: PollerService | None = None,
+    http_proxy: str = "",
 ) -> FastAPI:
     app = FastAPI(title="DecoParser web", docs_url=None, redoc_url=None)
     app.include_router(create_deletion_router(db, public_base_url))
-    app.include_router(create_api_router(db, bot_token, poller=poller))
+    app.include_router(
+        create_api_router(
+            db,
+            bot_token,
+            credentials=credentials,
+            public_base_url=public_base_url,
+            http_proxy=http_proxy,
+            poller=poller,
+        )
+    )
 
     @app.get("/health")
     async def health():
         return {"ok": True}
 
     if WEBAPP_DIR.exists():
-        # Статика: /app/styles.css, /app/app.js, /app/
         app.mount("/app/static", StaticFiles(directory=WEBAPP_DIR), name="webapp-static")
 
         @app.get("/app")

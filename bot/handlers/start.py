@@ -52,7 +52,7 @@ async def cmd_start(message: Message, bot: Bot, db: Database, settings: Settings
             )
         else:
             await message.answer(
-                "Вы одобрены. Откройте Mini App или «⚙️ Настройки».",
+                "Вы одобрены. Откройте Mini App → вкладка «Настройки».",
                 reply_markup=kb,
             )
         return

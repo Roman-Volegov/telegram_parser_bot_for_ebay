@@ -103,7 +103,10 @@ async def _set_status_and_notify(
     )
     is_admin = telegram_id in settings.admin_ids
     if status is UserStatus.APPROVED:
-        text = "✅ Заявка одобрена.\nНажмите «⚙️ Настройки» для мастера настройки."
+        text = (
+            "✅ Заявка одобрена.\n"
+            "Откройте Mini App → «Настройки» (или кнопку ⚙️ в меню)."
+        )
         markup = menu_kb(is_admin=is_admin, public_base_url=settings.public_base_url)
     elif status is UserStatus.REJECTED:
         text = "❌ Заявка отклонена."

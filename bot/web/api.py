@@ -6,7 +6,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from bot.db import Database
-from bot.models import SOURCE_LABELS, Source, User, UserStatus
+from bot.models import EBAY_MARKETPLACES, SOURCE_LABELS, Source, User, UserStatus
+from bot.providers.ebay_api import EbayApiProvider
+from bot.services.credentials import CredentialsService
 from bot.services.poller import PollerService
 from bot.web.telegram_auth import TelegramAuthError, validate_init_data
 
@@ -33,11 +35,17 @@ class SearchUpdateIn(BaseModel):
 class SetupIn(BaseModel):
     enabled_sources: list[Source] = Field(min_length=1)
     ebay_marketplace: str = "EBAY_US"
+    ebay_client_id: str | None = None
+    ebay_client_secret: str | None = None
 
 
 def create_api_router(
     db: Database,
     bot_token: str,
+    *,
+    credentials: CredentialsService,
+    public_base_url: str,
+    http_proxy: str = "",
     poller: PollerService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["miniapp"])
@@ -63,9 +71,13 @@ def create_api_router(
             raise HTTPException(status_code=403, detail="Ожидайте одобрения админа")
         return user
 
-    @router.get("/me")
-    async def api_me(user: User = Depends(current_user)) -> dict[str, Any]:
+    async def _settings_payload(user: User) -> dict[str, Any]:
         has_keys = await db.has_credentials(user.telegram_id)
+        deletion_token = None
+        deletion_url = None
+        if has_keys or Source.EBAY_API in user.enabled_sources:
+            deletion_token = await db.ensure_deletion_token(user.telegram_id)
+            deletion_url = f"{public_base_url.rstrip('/')}/ebay/deletion/{user.telegram_id}"
         return {
             "telegram_id": user.telegram_id,
             "username": user.username,
@@ -75,8 +87,22 @@ def create_api_router(
             "enabled_sources": [s.value for s in user.enabled_sources],
             "source_labels": {s.value: SOURCE_LABELS[s] for s in Source},
             "ebay_marketplace": user.ebay_marketplace,
+            "ebay_marketplaces": list(EBAY_MARKETPLACES),
             "has_ebay_keys": has_keys,
+            "deletion_url": deletion_url,
+            "deletion_token": deletion_token,
+            "ebay_checklist": [
+                "Зайдите на https://developer.ebay.com",
+                "Application Keys → создайте/откройте приложение",
+                "Скопируйте App ID (Client ID) и Cert ID (Client Secret)",
+                "Для Production укажите Marketplace Account Deletion URL и token ниже",
+                "Scope: https://api.ebay.com/oauth/api_scope",
+            ],
         }
+
+    @router.get("/me")
+    async def api_me(user: User = Depends(current_user)) -> dict[str, Any]:
+        return await _settings_payload(user)
 
     @router.get("/searches")
     async def api_list_searches(user: User = Depends(current_user)) -> dict[str, Any]:
@@ -163,19 +189,70 @@ def create_api_router(
         payload: SetupIn,
         user: User = Depends(current_user),
     ) -> dict[str, Any]:
-        if Source.EBAY_API in payload.enabled_sources:
-            has_keys = await db.has_credentials(user.telegram_id)
-            if not has_keys:
+        marketplace = payload.ebay_marketplace or "EBAY_US"
+        if marketplace not in EBAY_MARKETPLACES:
+            raise HTTPException(status_code=400, detail="Неизвестный marketplace")
+
+        client_id = (payload.ebay_client_id or "").strip()
+        client_secret = (payload.ebay_client_secret or "").strip()
+        wants_api = Source.EBAY_API in payload.enabled_sources
+        has_keys = await db.has_credentials(user.telegram_id)
+
+        if wants_api:
+            if client_id and client_secret:
+                provider = EbayApiProvider(
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    marketplace_id=marketplace,
+                    telegram_id=user.telegram_id,
+                    proxy=http_proxy or None,
+                )
+                try:
+                    await provider.verify_credentials()
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"OAuth не прошёл: {exc}",
+                    ) from exc
+                finally:
+                    await provider.aclose()
+                await credentials.save_ebay_keys(
+                    user.telegram_id, client_id, client_secret
+                )
+                has_keys = True
+            elif not has_keys:
                 raise HTTPException(
                     status_code=400,
-                    detail="Для eBay API сначала сохраните ключи в боте (/setup)",
+                    detail="Для eBay API укажите Client ID и Client Secret",
                 )
+
         await db.save_setup(
             user.telegram_id,
             enabled_sources=payload.enabled_sources,
-            ebay_marketplace=payload.ebay_marketplace or user.ebay_marketplace,
+            ebay_marketplace=marketplace,
             setup_completed=True,
         )
-        return {"ok": True}
+        user = await db.get_user(user.telegram_id)
+        assert user is not None
+        result = await _settings_payload(user)
+        result["ok"] = True
+        result["oauth_verified"] = bool(client_id and client_secret and wants_api)
+        return result
+
+    @router.delete("/keys")
+    async def api_revoke_keys(user: User = Depends(current_user)) -> dict[str, Any]:
+        removed = await credentials.revoke(user.telegram_id)
+        # Если eBay API был включён — убираем его из источников
+        fresh = await db.get_user(user.telegram_id)
+        assert fresh is not None
+        if Source.EBAY_API in fresh.enabled_sources:
+            remaining = [s for s in fresh.enabled_sources if s is not Source.EBAY_API]
+            await db.save_setup(
+                fresh.telegram_id,
+                enabled_sources=remaining,
+                ebay_marketplace=fresh.ebay_marketplace,
+                setup_completed=bool(remaining) and fresh.setup_completed,
+            )
+        return {"ok": True, "removed": removed}
 
     return router

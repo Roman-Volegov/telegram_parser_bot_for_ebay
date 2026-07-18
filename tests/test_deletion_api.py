@@ -4,7 +4,11 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from cryptography.fernet import Fernet
+
+from bot.crypto import CredentialsCrypto
 from bot.db import Database
+from bot.services.credentials import CredentialsService
 from bot.web.app import create_app
 
 
@@ -15,10 +19,14 @@ class DeletionApiTests(unittest.IsolatedAsyncioTestCase):
         await self.db.connect()
         await self.db.upsert_pending_user(10, "u", "User")
         self.token = await self.db.ensure_deletion_token(10)
+        credentials = CredentialsService(
+            self.db, CredentialsCrypto(Fernet.generate_key().decode())
+        )
         self.app = create_app(
             self.db,
             "https://example.com",
             bot_token="123:test",
+            credentials=credentials,
         )
         self.client = TestClient(self.app)
 

@@ -62,22 +62,42 @@
 
       <section id="panel-settings" class="panel">
         <form id="form-settings" class="form">
-          <p class="hint">Выберите источники мониторинга. Ключи eBay API по-прежнему задаются в боте.</p>
+          <p class="hint">Выберите источники. Для eBay API понадобятся ключи разработчика.</p>
           <div id="sources-box" class="sources"></div>
-          <label>
-            eBay marketplace
-            <select id="ebay-marketplace">
-              <option value="EBAY_US">EBAY_US</option>
-              <option value="EBAY_GB">EBAY_GB</option>
-              <option value="EBAY_DE">EBAY_DE</option>
-              <option value="EBAY_AU">EBAY_AU</option>
-              <option value="EBAY_CA">EBAY_CA</option>
-              <option value="EBAY_FR">EBAY_FR</option>
-              <option value="EBAY_IT">EBAY_IT</option>
-              <option value="EBAY_ES">EBAY_ES</option>
-            </select>
-          </label>
-          <p id="keys-status" class="hint"></p>
+
+          <div id="ebay-api-block" class="ebay-block hidden">
+            <h2 class="section-title">eBay API</h2>
+            <ol id="ebay-checklist" class="checklist"></ol>
+            <label>
+              Client ID (App ID)
+              <input id="ebay-client-id" type="text" autocomplete="off" placeholder="вставьте App ID" />
+            </label>
+            <label>
+              Client Secret (Cert ID)
+              <input id="ebay-client-secret" type="password" autocomplete="off" placeholder="вставьте Cert ID" />
+            </label>
+            <p class="hint">Секрет не сохраняется в браузере — уходит на сервер зашифрованным после OAuth-проверки.</p>
+            <label>
+              Marketplace
+              <select id="ebay-marketplace"></select>
+            </label>
+            <div id="deletion-box" class="deletion hidden">
+              <h3 class="section-title">Marketplace Account Deletion</h3>
+              <p class="hint">Укажите в developer.ebay.com для Production keyset:</p>
+              <label>
+                URL
+                <input id="deletion-url" type="text" readonly />
+              </label>
+              <label>
+                Verification token
+                <input id="deletion-token" type="text" readonly />
+              </label>
+              <button type="button" class="chip" id="btn-copy-deletion">Скопировать URL + token</button>
+            </div>
+            <p id="keys-status" class="hint"></p>
+            <button type="button" class="chip danger" id="btn-revoke-keys">🗑 Удалить ключи</button>
+          </div>
+
           <button class="primary" type="submit">Сохранить настройки</button>
         </form>
       </section>

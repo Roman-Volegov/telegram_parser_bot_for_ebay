@@ -20,6 +20,13 @@
     sourcesBox: document.getElementById("sources-box"),
     marketplace: document.getElementById("ebay-marketplace"),
     keysStatus: document.getElementById("keys-status"),
+    ebayApiBlock: document.getElementById("ebay-api-block"),
+    ebayChecklist: document.getElementById("ebay-checklist"),
+    ebayClientId: document.getElementById("ebay-client-id"),
+    ebayClientSecret: document.getElementById("ebay-client-secret"),
+    deletionBox: document.getElementById("deletion-box"),
+    deletionUrl: document.getElementById("deletion-url"),
+    deletionToken: document.getElementById("deletion-token"),
     toast: document.getElementById("toast"),
     errorScreen: document.getElementById("error-screen"),
     errorText: document.getElementById("error-text"),
@@ -48,7 +55,7 @@
     els.toast.textContent = message;
     els.toast.classList.remove("hidden");
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => els.toast.classList.add("hidden"), 2200);
+    toast._t = setTimeout(() => els.toast.classList.add("hidden"), 2400);
   }
 
   function showError(message) {
@@ -63,11 +70,22 @@
     document.querySelectorAll(".panel").forEach((panel) => {
       panel.classList.toggle("active", panel.id === `panel-${name}`);
     });
+    if (name === "settings") syncEbayBlockVisibility();
   }
 
-  function fillSources() {
+  function selectedSources() {
+    return [...els.sourcesBox.querySelectorAll("input:checked")].map((el) => el.value);
+  }
+
+  function syncEbayBlockVisibility() {
+    const show = selectedSources().includes("ebay_api");
+    els.ebayApiBlock.classList.toggle("hidden", !show);
+  }
+
+  function fillSettings() {
     const labels = state.me.source_labels || {};
     const enabled = new Set(state.me.enabled_sources || []);
+
     els.createSource.innerHTML = "";
     enabled.forEach((source) => {
       const opt = document.createElement("option");
@@ -86,11 +104,41 @@
       `;
       els.sourcesBox.appendChild(row);
     });
+    els.sourcesBox.querySelectorAll("input").forEach((input) => {
+      input.addEventListener("change", syncEbayBlockVisibility);
+    });
 
-    els.marketplace.value = state.me.ebay_marketplace || "EBAY_US";
+    els.marketplace.innerHTML = "";
+    (state.me.ebay_marketplaces || ["EBAY_US"]).forEach((market) => {
+      const opt = document.createElement("option");
+      opt.value = market;
+      opt.textContent = market;
+      if (market === (state.me.ebay_marketplace || "EBAY_US")) opt.selected = true;
+      els.marketplace.appendChild(opt);
+    });
+
+    els.ebayChecklist.innerHTML = "";
+    (state.me.ebay_checklist || []).forEach((item) => {
+      const li = document.createElement("li");
+      li.textContent = item;
+      els.ebayChecklist.appendChild(li);
+    });
+
     els.keysStatus.textContent = state.me.has_ebay_keys
-      ? "🔑 eBay API ключи сохранены в боте"
-      : "🔑 eBay API ключи не заданы — добавьте через /setup в боте";
+      ? "🔑 Ключи сохранены (зашифрованы). Можно оставить поля пустыми — текущие ключи сохранятся."
+      : "🔑 Ключи ещё не заданы — заполните Client ID и Secret.";
+
+    if (state.me.deletion_url && state.me.deletion_token) {
+      els.deletionBox.classList.remove("hidden");
+      els.deletionUrl.value = state.me.deletion_url;
+      els.deletionToken.value = state.me.deletion_token;
+    } else {
+      els.deletionBox.classList.add("hidden");
+    }
+
+    els.ebayClientId.value = "";
+    els.ebayClientSecret.value = "";
+    syncEbayBlockVisibility();
   }
 
   function renderSearches() {
@@ -132,12 +180,11 @@
   async function loadAll() {
     state.me = await api("/me");
     const name = state.me.username ? `@${state.me.username}` : "профиль";
-    els.greeting.textContent = state.me.setup_completed ? name : "Настройте источники";
-    fillSources();
+    els.greeting.textContent = state.me.setup_completed ? name : "Сначала настройки";
+    fillSettings();
     const list = await api("/searches");
     state.searches = list.items || [];
     renderSearches();
-    if (!state.me.setup_completed) switchTab("settings");
   }
 
   document.querySelectorAll(".tab").forEach((btn) => {
@@ -150,6 +197,31 @@
     try {
       await loadAll();
       toast("Обновлено");
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  document.getElementById("btn-copy-deletion").addEventListener("click", async () => {
+    const text = `URL: ${els.deletionUrl.value}\nToken: ${els.deletionToken.value}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("Скопировано");
+    } catch {
+      toast("Не удалось скопировать");
+    }
+  });
+
+  document.getElementById("btn-revoke-keys").addEventListener("click", async () => {
+    const ok = tg?.showConfirm
+      ? await new Promise((resolve) => tg.showConfirm("Удалить eBay API ключи?", resolve))
+      : window.confirm("Удалить eBay API ключи?");
+    if (!ok) return;
+    try {
+      await api("/keys", { method: "DELETE" });
+      toast("Ключи удалены");
+      await loadAll();
+      switchTab("settings");
     } catch (err) {
       toast(err.message);
     }
@@ -209,24 +281,39 @@
 
   document.getElementById("form-settings").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const enabled = [...els.sourcesBox.querySelectorAll("input:checked")].map((el) => el.value);
+    const enabled = selectedSources();
     if (!enabled.length) {
       toast("Выберите хотя бы один источник");
       return;
     }
+    const payload = {
+      enabled_sources: enabled,
+      ebay_marketplace: els.marketplace.value,
+    };
+    const clientId = els.ebayClientId.value.trim();
+    const clientSecret = els.ebayClientSecret.value.trim();
+    if (enabled.includes("ebay_api")) {
+      if (clientId) payload.ebay_client_id = clientId;
+      if (clientSecret) payload.ebay_client_secret = clientSecret;
+    }
     try {
-      await api("/setup", {
+      const result = await api("/setup", {
         method: "POST",
-        body: JSON.stringify({
-          enabled_sources: enabled,
-          ebay_marketplace: els.marketplace.value,
-        }),
+        body: JSON.stringify(payload),
       });
-      toast("Настройки сохранены");
-      await loadAll();
-      switchTab("searches");
+      state.me = result;
+      fillSettings();
+      toast(result.oauth_verified ? "OAuth ок, настройки сохранены" : "Настройки сохранены");
+      tg?.HapticFeedback?.notificationOccurred("success");
+      if (result.setup_completed) {
+        const list = await api("/searches");
+        state.searches = list.items || [];
+        renderSearches();
+        switchTab("searches");
+      }
     } catch (err) {
       toast(err.message);
+      tg?.HapticFeedback?.notificationOccurred("error");
     }
   });
 
@@ -236,5 +323,16 @@
     return Number.isFinite(n) ? n : null;
   }
 
-  loadAll().catch((err) => showError(err.message || "Ошибка загрузки"));
+  function initialTab() {
+    const hash = (location.hash || "").replace("#", "");
+    if (hash === "settings" || hash === "create" || hash === "searches") return hash;
+    return null;
+  }
+
+  loadAll()
+    .then(() => {
+      const tab = initialTab() || (!state.me.setup_completed ? "settings" : "searches");
+      switchTab(tab);
+    })
+    .catch((err) => showError(err.message || "Ошибка загрузки"));
 })();

@@ -207,3 +207,32 @@ input, select {
   margin-right: 6px;
 }
 .badge.pause { background: color-mix(in srgb, #c79a2b 35%, var(--secondary)); }
+.section-title {
+  margin: 4px 0 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+.ebay-block {
+  display: grid;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--hint) 25%, transparent);
+}
+.checklist {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--hint);
+  font-size: 13px;
+  display: grid;
+  gap: 4px;
+}
+.deletion {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--bg);
+}
+.deletion input[readonly] {
+  opacity: 0.95;
+}

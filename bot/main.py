@@ -64,7 +64,9 @@ async def main() -> None:
         db,
         settings.public_base_url,
         bot_token=settings.telegram_bot_token,
+        credentials=credentials,
         poller=poller,
+        http_proxy=settings.http_proxy,
     )
     config = uvicorn.Config(
         app,
