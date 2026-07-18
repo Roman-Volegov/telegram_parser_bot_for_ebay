@@ -5,7 +5,7 @@ import re
 from urllib.parse import urlencode
 
 import feedparser
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from bot.models import Listing, Search, Source
 from bot.providers.base import BaseProvider, ProviderError
@@ -148,47 +148,38 @@ def _parse_html_listings(html: str, *, limit: int) -> list[Listing]:
     soup = BeautifulSoup(html, "lxml")
     listings: list[Listing] = []
     seen_ids: set[str] = set()
-    for item in soup.select("li.s-item"):
+    # Новая выдача eBay: li.s-card; старая: li.s-item
+    cards = soup.select("li.s-card, li.s-item")
+    for item in cards:
         if len(listings) >= limit:
             break
-        link = item.select_one("a.s-item__link")
-        title_el = item.select_one(".s-item__title")
+        link = item.select_one(
+            "a.s-card__link[href*='/itm/'], a.s-item__link[href*='/itm/'], a[href*='/itm/']"
+        )
+        title_el = item.select_one(
+            ".s-card__title .su-styled-text, .s-card__title, .s-item__title"
+        )
         if not link or not title_el:
             continue
         href = link.get("href") or ""
-        title = title_el.get_text(" ", strip=True)
+        title = _clean_ebay_title(title_el.get_text(" ", strip=True))
         if not href or not title or title.lower().startswith("shop on ebay"):
             continue
         item_id = _extract_ebay_item_id(href)
         if not item_id or item_id in seen_ids:
             continue
         seen_ids.add(item_id)
-        price_el = item.select_one(".s-item__price")
-        subtitle_el = item.select_one(".s-item__subtitle")
-        shipping_el = item.select_one(
-            ".s-item__shipping, .s-item__logisticsCost, .s-item__freeXDays"
-        )
-        format_el = item.select_one(
-            ".s-item__purchaseOptions, .s-item__dynamic, .s-item__listingDate"
-        )
-        bids_el = item.select_one(".s-item__bids, .s-item__bidCount")
+
+        price_el = item.select_one(".s-card__price, .s-item__price")
+        subtitle_el = item.select_one(".s-card__subtitle, .s-item__subtitle")
+        ship_text = _extract_card_shipping_text(item)
         image_el = item.select_one("img")
         price, currency = parse_price_text(
             price_el.get_text(" ", strip=True) if price_el else ""
         )
         subtitle = subtitle_el.get_text(" ", strip=True) if subtitle_el else ""
-        ship_text = shipping_el.get_text(" ", strip=True) if shipping_el else ""
         ship_cost, ship_cur, ship_free = parse_shipping_info(ship_text)
-        type_bits = " ".join(
-            part
-            for part in [
-                format_el.get_text(" ", strip=True) if format_el else "",
-                bids_el.get_text(" ", strip=True) if bids_el else "",
-                item.get_text(" ", strip=True),
-            ]
-            if part
-        )
-        listing_type = parse_ebay_html_listing_type(type_bits)
+        listing_type = parse_ebay_html_listing_type(item.get_text(" ", strip=True))
         description = truncate(f"{title}. {subtitle}".strip(". "), 450)
         image_url = None
         if image_el:
@@ -210,6 +201,30 @@ def _parse_html_listings(html: str, *, limit: int) -> list[Listing]:
             )
         )
     return listings
+
+
+def _clean_ebay_title(title: str) -> str:
+    title = re.sub(
+        r"\s*Opens in a new window or tab\s*$",
+        "",
+        title or "",
+        flags=re.IGNORECASE,
+    )
+    return title.strip()
+
+
+def _extract_card_shipping_text(item: Tag) -> str:
+    shipping_el = item.select_one(
+        ".s-item__shipping, .s-item__logisticsCost, .s-item__freeXDays"
+    )
+    if shipping_el:
+        return shipping_el.get_text(" ", strip=True)
+    for row in item.select(".s-card__attribute-row, .su-styled-text"):
+        text = row.get_text(" ", strip=True)
+        lower = text.lower()
+        if any(token in lower for token in ("delivery", "shipping", "postage")):
+            return text
+    return ""
 
 
 def _extract_ebay_item_id(url: str) -> str | None:

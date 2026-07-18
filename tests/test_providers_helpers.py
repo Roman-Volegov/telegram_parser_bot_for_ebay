@@ -36,13 +36,26 @@ class HelpersTests(unittest.TestCase):
             <span class="s-item__price">US $24.99</span>
             <span class="s-item__shipping">Free shipping</span>
           </li>
+          <li class="s-card">
+            <a class="s-card__link" href="https://www.ebay.com/itm/158095592633?hash=1">img</a>
+            <div class="s-card__title">
+              <span class="su-styled-text">Vintage Estate Trifari Opens in a new window or tab</span>
+            </div>
+            <div class="s-card__subtitle">Pre-Owned</div>
+            <span class="s-card__price">$49.99</span>
+            <div class="s-card__attribute-row">+$24.67 delivery</div>
+          </li>
         </ul>
         """
         items = _parse_html_listings(html, limit=10)
-        self.assertEqual(len(items), 1)
+        self.assertEqual(len(items), 2)
         self.assertEqual(items[0].id, "298497011183")
         self.assertEqual(items[0].price, 24.99)
         self.assertTrue(items[0].shipping_free)
+        self.assertEqual(items[1].id, "158095592633")
+        self.assertEqual(items[1].title, "Vintage Estate Trifari")
+        self.assertEqual(items[1].price, 49.99)
+        self.assertEqual(items[1].shipping_cost, 24.67)
 
     def test_posh_id(self):
         self.assertEqual(
