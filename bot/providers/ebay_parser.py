@@ -25,25 +25,40 @@ class EbayParserProvider(BaseProvider):
 
     def __init__(self, *, proxy: str | None = None) -> None:
         self._client = build_client(proxy)
+        self._warmed = False
 
     async def aclose(self) -> None:
         await self._client.aclose()
 
     async def search(self, search: Search, *, limit: int = 20) -> list[Listing]:
         try:
-            listings = await self._search_rss(search, limit=limit)
+            await self._warmup()
+            # eBay часто отдаёт HTML вместо RSS на _rss=1 — сначала HTML.
+            listings = await self._search_html(search, limit=limit)
             if listings:
                 return listings
-            logger.info("eBay RSS empty for %r, falling back to HTML", search.keywords)
-            return await self._search_html(search, limit=limit)
+            logger.info("eBay HTML empty for %r, trying RSS", search.keywords)
+            return await self._search_rss(search, limit=limit)
         except Exception as exc:
             raise ProviderError(f"eBay parser failed: {exc}") from exc
+
+    async def _warmup(self) -> None:
+        if self._warmed:
+            return
+        try:
+            response = await self._client.get(
+                "https://www.ebay.com/",
+                headers={"Referer": "https://www.google.com/"},
+            )
+            if response.status_code < 400:
+                self._warmed = True
+        except Exception as exc:
+            logger.debug("eBay warmup failed: %s", exc)
 
     def _build_params(self, search: Search) -> dict[str, str]:
         params: dict[str, str] = {
             "_nkw": search.keywords,
             "_sop": "10",  # newly listed
-            "rt": "nc",
         }
         if search.min_price is not None:
             params["_udlo"] = str(search.min_price)
@@ -61,10 +76,23 @@ class EbayParserProvider(BaseProvider):
         params["_rss"] = "1"
         url = f"https://www.ebay.com/sch/i.html?{urlencode(params)}"
         response = await request_with_retries(
-            self._client, "GET", url, min_delay=2.0, max_delay=5.0
+            self._client,
+            "GET",
+            url,
+            min_delay=1.0,
+            max_delay=2.5,
+            headers={
+                "Accept": "application/rss+xml, application/xml, text/xml, */*;q=0.8",
+                "Referer": "https://www.ebay.com/",
+                "Sec-Fetch-Site": "same-origin",
+            },
         )
         response.raise_for_status()
-        feed = feedparser.parse(response.text)
+        body = response.text or ""
+        if "<rss" not in body.lower() and "<feed" not in body.lower():
+            logger.info("eBay _rss=1 returned non-RSS for %r", search.keywords)
+            return []
+        feed = feedparser.parse(body)
         listings: list[Listing] = []
         for entry in feed.entries[:limit]:
             link = getattr(entry, "link", "") or ""
@@ -102,77 +130,103 @@ class EbayParserProvider(BaseProvider):
         params["_ipg"] = str(min(max(limit, 20), 60))
         url = f"https://www.ebay.com/sch/i.html?{urlencode(params)}"
         response = await request_with_retries(
-            self._client, "GET", url, min_delay=2.0, max_delay=5.0
+            self._client,
+            "GET",
+            url,
+            min_delay=1.0,
+            max_delay=2.5,
+            headers={
+                "Referer": "https://www.ebay.com/",
+                "Sec-Fetch-Site": "same-origin",
+            },
         )
         response.raise_for_status()
-        soup = BeautifulSoup(response.text, "lxml")
-        listings: list[Listing] = []
-        for item in soup.select("li.s-item"):
-            if len(listings) >= limit:
-                break
-            link = item.select_one("a.s-item__link")
-            title_el = item.select_one(".s-item__title")
-            if not link or not title_el:
-                continue
-            href = link.get("href") or ""
-            title = title_el.get_text(" ", strip=True)
-            if not href or not title or title.lower().startswith("shop on ebay"):
-                continue
-            item_id = _extract_ebay_item_id(href)
-            if not item_id:
-                continue
-            price_el = item.select_one(".s-item__price")
-            subtitle_el = item.select_one(".s-item__subtitle")
-            shipping_el = item.select_one(
-                ".s-item__shipping, .s-item__logisticsCost, .s-item__freeXDays"
+        return _parse_html_listings(response.text, limit=limit)
+
+
+def _parse_html_listings(html: str, *, limit: int) -> list[Listing]:
+    soup = BeautifulSoup(html, "lxml")
+    listings: list[Listing] = []
+    seen_ids: set[str] = set()
+    for item in soup.select("li.s-item"):
+        if len(listings) >= limit:
+            break
+        link = item.select_one("a.s-item__link")
+        title_el = item.select_one(".s-item__title")
+        if not link or not title_el:
+            continue
+        href = link.get("href") or ""
+        title = title_el.get_text(" ", strip=True)
+        if not href or not title or title.lower().startswith("shop on ebay"):
+            continue
+        item_id = _extract_ebay_item_id(href)
+        if not item_id or item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
+        price_el = item.select_one(".s-item__price")
+        subtitle_el = item.select_one(".s-item__subtitle")
+        shipping_el = item.select_one(
+            ".s-item__shipping, .s-item__logisticsCost, .s-item__freeXDays"
+        )
+        format_el = item.select_one(
+            ".s-item__purchaseOptions, .s-item__dynamic, .s-item__listingDate"
+        )
+        bids_el = item.select_one(".s-item__bids, .s-item__bidCount")
+        image_el = item.select_one("img")
+        price, currency = parse_price_text(
+            price_el.get_text(" ", strip=True) if price_el else ""
+        )
+        subtitle = subtitle_el.get_text(" ", strip=True) if subtitle_el else ""
+        ship_text = shipping_el.get_text(" ", strip=True) if shipping_el else ""
+        ship_cost, ship_cur, ship_free = parse_shipping_info(ship_text)
+        type_bits = " ".join(
+            part
+            for part in [
+                format_el.get_text(" ", strip=True) if format_el else "",
+                bids_el.get_text(" ", strip=True) if bids_el else "",
+                item.get_text(" ", strip=True),
+            ]
+            if part
+        )
+        listing_type = parse_ebay_html_listing_type(type_bits)
+        description = truncate(f"{title}. {subtitle}".strip(". "), 450)
+        image_url = None
+        if image_el:
+            image_url = image_el.get("src") or image_el.get("data-src")
+        listings.append(
+            Listing(
+                id=item_id,
+                title=title,
+                description=description,
+                price=price,
+                currency=currency,
+                image_url=image_url,
+                item_url=href.split("?")[0],
+                source=Source.EBAY_PARSER,
+                shipping_cost=ship_cost,
+                shipping_currency=ship_cur or currency,
+                shipping_free=ship_free,
+                listing_type=listing_type,
             )
-            format_el = item.select_one(
-                ".s-item__purchaseOptions, .s-item__dynamic, .s-item__listingDate"
-            )
-            bids_el = item.select_one(".s-item__bids, .s-item__bidCount")
-            image_el = item.select_one("img")
-            price, currency = parse_price_text(
-                price_el.get_text(" ", strip=True) if price_el else ""
-            )
-            subtitle = subtitle_el.get_text(" ", strip=True) if subtitle_el else ""
-            ship_text = shipping_el.get_text(" ", strip=True) if shipping_el else ""
-            ship_cost, ship_cur, ship_free = parse_shipping_info(ship_text)
-            type_bits = " ".join(
-                part
-                for part in [
-                    format_el.get_text(" ", strip=True) if format_el else "",
-                    bids_el.get_text(" ", strip=True) if bids_el else "",
-                    item.get_text(" ", strip=True),
-                ]
-                if part
-            )
-            listing_type = parse_ebay_html_listing_type(type_bits)
-            description = truncate(f"{title}. {subtitle}".strip(". "), 450)
-            listings.append(
-                Listing(
-                    id=item_id,
-                    title=title,
-                    description=description,
-                    price=price,
-                    currency=currency,
-                    image_url=image_el.get("src") if image_el else None,
-                    item_url=href.split("?")[0],
-                    source=Source.EBAY_PARSER,
-                    shipping_cost=ship_cost,
-                    shipping_currency=ship_cur or currency,
-                    shipping_free=ship_free,
-                    listing_type=listing_type,
-                )
-            )
-        return listings
+        )
+    return listings
 
 
 def _extract_ebay_item_id(url: str) -> str | None:
     match = re.search(r"/itm/(?:[^/]+/)?(\d+)", url)
     if match:
-        return match.group(1)
+        item_id = match.group(1)
+        # Заглушки в разметке eBay (не реальные лоты)
+        if item_id in {"123456", "0"}:
+            return None
+        return item_id
     match = re.search(r"[?&]item=(\d+)", url)
-    return match.group(1) if match else None
+    if not match:
+        return None
+    item_id = match.group(1)
+    if item_id in {"123456", "0"}:
+        return None
+    return item_id
 
 
 def _strip_html(text: str) -> str:

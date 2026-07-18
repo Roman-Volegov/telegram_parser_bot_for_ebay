@@ -9,19 +9,35 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# Современный desktop Chrome: старые/«ботовые» UA с Linux часто ловят 403 у eBay/Akamai.
 USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
+
+BROWSER_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+    "Cache-Control": "max-age=0",
+    "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
 
 
 def build_client(proxy: str | None = None, *, timeout: float = 30.0) -> httpx.AsyncClient:
     kwargs: dict = {
         "timeout": timeout,
-        "headers": {
-            "User-Agent": USER_AGENT,
-            "Accept-Language": "en-US,en;q=0.9",
-        },
+        "headers": dict(BROWSER_HEADERS),
         "follow_redirects": True,
     }
     if proxy:
@@ -44,7 +60,7 @@ async def request_with_retries(
         try:
             await asyncio.sleep(random.uniform(min_delay, max_delay))
             response = await client.request(method, url, **kwargs)
-            if response.status_code in {429, 503}:
+            if response.status_code in {403, 429, 503}:
                 wait = 2 ** attempt + random.uniform(0.5, 1.5)
                 logger.warning(
                     "HTTP %s for %s, retry in %.1fs",
