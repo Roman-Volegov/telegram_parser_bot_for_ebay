@@ -3,24 +3,22 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
 from bot.config import Settings
-from bot.menu import Btn, main_menu_kb
+from bot.menu import Btn, menu_kb, webapp_url_from_base
 from bot.models import User
 
 router = Router(name="common")
 
 HELP_TEXT = """
 <b>Меню пользователя</b>
-➕ Новый поиск — создать мониторинг
-📋 Мои поиски — список и управление
-⚙️ Настройки — источники и ключи eBay
-🔑 Ключи API — статус / отзыв ключей
-❓ Справка — это сообщение
-🏠 Меню — показать кнопки снова
+📱 Mini App — поиски и настройки в удобном UI
+➕ Новый поиск / 📋 Мои поиски
+⚙️ Настройки / 🔑 Ключи API
+❓ Справка / 🏠 Меню
 
-Также доступны команды в меню слева от поля ввода (/add, /list, /setup…).
+Команды: /app /add /list /setup …
 
 <b>Админ</b>
 👥 Пользователи — заявки и статусы
@@ -40,5 +38,24 @@ async def cmd_help(
     await message.answer(
         HELP_TEXT,
         parse_mode="HTML",
-        reply_markup=main_menu_kb(is_admin=is_admin),
+        reply_markup=menu_kb(is_admin=is_admin, public_base_url=settings.public_base_url),
+    )
+
+
+@router.message(Command("app"))
+async def cmd_app(message: Message, settings: Settings) -> None:
+    url = webapp_url_from_base(settings.public_base_url)
+    if not url.startswith("https://"):
+        await message.answer(
+            "Mini App требует HTTPS.\n"
+            f"Сейчас PUBLIC_BASE_URL={settings.public_base_url}"
+        )
+        return
+    await message.answer(
+        "Откройте Mini App:",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="📱 Открыть Mini App", web_app=WebAppInfo(url=url))]
+            ]
+        ),
     )

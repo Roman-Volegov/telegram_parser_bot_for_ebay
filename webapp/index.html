@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>DecoParser</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/app/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="top">
+      <div>
+        <p class="eyebrow">DecoParser</p>
+        <h1 id="greeting">Загрузка…</h1>
+      </div>
+      <button id="btn-refresh" class="ghost" type="button" aria-label="Обновить">↻</button>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="searches" type="button">Поиски</button>
+      <button class="tab" data-tab="create" type="button">Новый</button>
+      <button class="tab" data-tab="settings" type="button">Настройки</button>
+    </nav>
+
+    <main>
+      <section id="panel-searches" class="panel active">
+        <div id="searches-empty" class="empty hidden">
+          <p>Поисков пока нет</p>
+          <button type="button" class="primary" data-go="create">Создать первый</button>
+        </div>
+        <div id="searches-list" class="list"></div>
+      </section>
+
+      <section id="panel-create" class="panel">
+        <form id="form-create" class="form">
+          <label>
+            Источник
+            <select id="create-source" required></select>
+          </label>
+          <label>
+            Ключевые слова
+            <input id="create-keywords" type="text" placeholder="nike dunk low" required minlength="2" />
+          </label>
+          <div class="row">
+            <label>
+              Цена от
+              <input id="create-min" type="number" min="0" step="0.01" placeholder="—" />
+            </label>
+            <label>
+              Цена до
+              <input id="create-max" type="number" min="0" step="0.01" placeholder="—" />
+            </label>
+          </div>
+          <label class="check">
+            <input id="create-bin" type="checkbox" checked />
+            Только Buy It Now (eBay)
+          </label>
+          <button class="primary" type="submit">Создать поиск</button>
+        </form>
+      </section>
+
+      <section id="panel-settings" class="panel">
+        <form id="form-settings" class="form">
+          <p class="hint">Выберите источники мониторинга. Ключи eBay API по-прежнему задаются в боте.</p>
+          <div id="sources-box" class="sources"></div>
+          <label>
+            eBay marketplace
+            <select id="ebay-marketplace">
+              <option value="EBAY_US">EBAY_US</option>
+              <option value="EBAY_GB">EBAY_GB</option>
+              <option value="EBAY_DE">EBAY_DE</option>
+              <option value="EBAY_AU">EBAY_AU</option>
+              <option value="EBAY_CA">EBAY_CA</option>
+              <option value="EBAY_FR">EBAY_FR</option>
+              <option value="EBAY_IT">EBAY_IT</option>
+              <option value="EBAY_ES">EBAY_ES</option>
+            </select>
+          </label>
+          <p id="keys-status" class="hint"></p>
+          <button class="primary" type="submit">Сохранить настройки</button>
+        </form>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+    <div id="error-screen" class="error-screen hidden">
+      <h2>Нет доступа</h2>
+      <p id="error-text"></p>
+      <p class="hint">Откройте бота @DecoParser_bot и нажмите /start</p>
+    </div>
+  </div>
+  <script src="/app/app.js"></script>
+</body>
+</html>

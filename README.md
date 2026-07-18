@@ -47,14 +47,20 @@ python -m bot
 
 ```bash
 cd ~/ebay-poshmark-bot
-cp .env.example .env   # или отредактировать существующий .env
-# обязательны: TELEGRAM_BOT_TOKEN, ADMIN_TELEGRAM_IDS, CREDENTIALS_ENCRYPTION_KEY
-# PUBLIC_BASE_URL=http://<VPS_IP>:18080
+cp .env.example .env
+# TELEGRAM_BOT_TOKEN, ADMIN_TELEGRAM_IDS, CREDENTIALS_ENCRYPTION_KEY
+# PUBLIC_BASE_URL=https://<IP>.sslip.io:8443
+# MINIAPP_DOMAIN=<IP>.sslip.io
 sudo docker compose up -d --build
-sudo docker compose logs -f
 ```
 
-Хостовый порт webhook: **18080**. Контейнер: `ebay-poshmark-bot`.
+- HTTP health: `18080`
+- HTTPS Mini App (Caddy): `8443` → `/app/`
+- Контейнеры: `ebay-poshmark-bot`, `ebay-poshmark-caddy`
+
+### Mini App
+Открывается кнопкой **📱 Mini App**, командой `/app` или menu button бота.  
+Авторизация через Telegram `initData` (HMAC).
 
 ## Команды
 

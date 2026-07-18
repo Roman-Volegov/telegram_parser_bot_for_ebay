@@ -14,6 +14,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY bot ./bot
+COPY webapp ./webapp
 
 RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /app/data \

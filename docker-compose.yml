@@ -10,13 +10,33 @@ services:
       - .env
     volumes:
       - ebay_bot_data:/app/data
-    ports:
-      # Хостовый порт 18080 — чтобы не конфликтовать с другими сервисами на 8080
-      - "18080:8080"
+    expose:
+      - "8080"
     environment:
       DATABASE_PATH: /app/data/bot.db
       WEB_HOST: 0.0.0.0
       WEB_PORT: 8080
+    # прямой доступ оставляем на 18080 (HTTP) для отладки/health
+    ports:
+      - "18080:8080"
+
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: ebay-poshmark-caddy
+    restart: unless-stopped
+    depends_on:
+      - bot
+    ports:
+      - "80:80"
+      - "8443:443"
+    environment:
+      MINIAPP_DOMAIN: ${MINIAPP_DOMAIN:-78.17.135.134.sslip.io}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
 
 volumes:
   ebay_bot_data:
+  caddy_data:
+  caddy_config:

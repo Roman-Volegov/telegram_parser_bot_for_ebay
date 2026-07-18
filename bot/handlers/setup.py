@@ -14,7 +14,7 @@ from bot.keyboards import (
     setup_confirm_kb,
     sources_multiselect_kb,
 )
-from bot.menu import Btn, main_menu_kb
+from bot.menu import Btn, menu_kb
 from bot.models import SOURCE_LABELS, Source, User
 from bot.providers.ebay_api import EbayApiProvider
 from bot.services.credentials import CredentialsService
@@ -253,7 +253,7 @@ async def setup_save(
     await callback.message.answer(
         "\n".join(text_parts),
         parse_mode="HTML",
-        reply_markup=main_menu_kb(is_admin=is_admin),
+        reply_markup=menu_kb(is_admin=is_admin, public_base_url=settings.public_base_url),
     )
     await callback.answer("Сохранено")
 

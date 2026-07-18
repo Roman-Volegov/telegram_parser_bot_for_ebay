@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from bot.config import Settings
-from bot.menu import Btn, main_menu_kb
+from bot.menu import Btn, menu_kb
 from bot.models import User
 
 router = Router(name="menu")
@@ -21,7 +21,7 @@ async def show_menu(
     await state.clear()
     is_admin = message.from_user is not None and message.from_user.id in settings.admin_ids
     await message.answer(
-        "Главное меню. Выберите действие кнопкой ниже\n"
-        "или через меню команд слева от поля ввода.",
-        reply_markup=main_menu_kb(is_admin=is_admin),
+        "Главное меню. Выберите действие кнопкой ниже,\n"
+        "откройте Mini App или меню команд слева.",
+        reply_markup=menu_kb(is_admin=is_admin, public_base_url=settings.public_base_url),
     )

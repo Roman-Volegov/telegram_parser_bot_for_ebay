@@ -15,7 +15,11 @@ class DeletionApiTests(unittest.IsolatedAsyncioTestCase):
         await self.db.connect()
         await self.db.upsert_pending_user(10, "u", "User")
         self.token = await self.db.ensure_deletion_token(10)
-        self.app = create_app(self.db, "https://example.com")
+        self.app = create_app(
+            self.db,
+            "https://example.com",
+            bot_token="123:test",
+        )
         self.client = TestClient(self.app)
 
     async def asyncTearDown(self):

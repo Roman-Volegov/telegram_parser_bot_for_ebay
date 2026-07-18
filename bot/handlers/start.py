@@ -7,7 +7,7 @@ from aiogram.types import Message
 from bot.config import Settings
 from bot.db import Database
 from bot.keyboards import admin_review_kb
-from bot.menu import main_menu_kb, remove_menu_kb
+from bot.menu import menu_kb, remove_menu_kb
 from bot.models import UserStatus
 
 router = Router(name="start")
@@ -44,15 +44,15 @@ async def cmd_start(message: Message, bot: Bot, db: Database, settings: Settings
         )
         return
     if user.status is UserStatus.APPROVED:
-        kb = main_menu_kb(is_admin=is_admin)
+        kb = menu_kb(is_admin=is_admin, public_base_url=settings.public_base_url)
         if user.setup_completed:
             await message.answer(
-                "С возвращением! Пользуйтесь кнопками меню ниже.",
+                "С возвращением! Пользуйтесь кнопками меню или Mini App.",
                 reply_markup=kb,
             )
         else:
             await message.answer(
-                "Вы одобрены. Нажмите «⚙️ Настройки» или /setup.",
+                "Вы одобрены. Откройте Mini App или «⚙️ Настройки».",
                 reply_markup=kb,
             )
         return

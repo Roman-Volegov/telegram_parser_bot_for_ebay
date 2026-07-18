@@ -1,0 +1,5 @@
+# HTTPS для Mini App (хост 8443 -> контейнер 443). Порт 443 на VPS занят xray — не трогаем.
+{$MINIAPP_DOMAIN:78.17.135.134.sslip.io} {
+	encode gzip
+	reverse_proxy bot:8080
+}

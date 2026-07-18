@@ -14,7 +14,7 @@ from bot.config import get_settings
 from bot.crypto import CredentialsCrypto
 from bot.db import Database
 from bot.handlers import build_root_router
-from bot.menu import setup_bot_commands
+from bot.menu import setup_bot_commands, webapp_url_from_base
 from bot.middlewares import AccessMiddleware, InjectMiddleware
 from bot.services.cleanup import CleanupService
 from bot.services.credentials import CredentialsService
@@ -60,7 +60,12 @@ async def main() -> None:
     dp.update.middleware(AccessMiddleware(settings.admin_ids))
     dp.include_router(build_root_router())
 
-    app = create_app(db, settings.public_base_url)
+    app = create_app(
+        db,
+        settings.public_base_url,
+        bot_token=settings.telegram_bot_token,
+        poller=poller,
+    )
     config = uvicorn.Config(
         app,
         host=settings.web_host,
@@ -72,12 +77,14 @@ async def main() -> None:
 
     poller.start()
     cleanup.start()
-    await setup_bot_commands(bot, settings.admin_ids)
+    webapp_url = webapp_url_from_base(settings.public_base_url)
+    await setup_bot_commands(bot, settings.admin_ids, webapp_url=webapp_url)
     logger.info(
-        "Starting bot+web (poll=%ss, web=%s:%s)",
+        "Starting bot+web (poll=%ss, web=%s:%s, miniapp=%s)",
         settings.poll_interval_sec,
         settings.web_host,
         settings.web_port,
+        webapp_url,
     )
 
     try:
