@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,30 +14,31 @@ class Settings(BaseSettings):
     )
 
     telegram_bot_token: str = Field(alias="TELEGRAM_BOT_TOKEN")
-    allowed_user_ids: str = Field(default="", alias="ALLOWED_USER_IDS")
-    watch_poll_interval_seconds: int = Field(
-        default=120,
-        alias="WATCH_POLL_INTERVAL_SECONDS",
-    )
-    ebay_app_id: str = Field(default="", alias="EBAY_APP_ID")
-    ebay_cert_id: str = Field(default="", alias="EBAY_CERT_ID")
-    ebay_marketplace_id: str = Field(default="EBAY_US", alias="EBAY_MARKETPLACE_ID")
+    admin_telegram_ids: str = Field(default="", alias="ADMIN_TELEGRAM_IDS")
+    credentials_encryption_key: str = Field(alias="CREDENTIALS_ENCRYPTION_KEY")
+    public_base_url: str = Field(default="http://localhost:8080", alias="PUBLIC_BASE_URL")
+    poll_interval_sec: int = Field(default=300, alias="POLL_INTERVAL_SEC")
+    seen_items_ttl_days: int = Field(default=90, alias="SEEN_ITEMS_TTL_DAYS")
     database_path: str = Field(default="data/bot.db", alias="DATABASE_PATH")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    web_host: str = Field(default="0.0.0.0", alias="WEB_HOST")
+    web_port: int = Field(default=8080, alias="WEB_PORT")
+    http_proxy: str = Field(default="", alias="HTTP_PROXY")
+
+    @field_validator("public_base_url")
+    @classmethod
+    def strip_trailing_slash(cls, value: str) -> str:
+        return value.rstrip("/")
 
     @property
-    def allowed_ids(self) -> set[int]:
-        if not self.allowed_user_ids.strip():
+    def admin_ids(self) -> set[int]:
+        if not self.admin_telegram_ids.strip():
             return set()
         return {
             int(part.strip())
-            for part in self.allowed_user_ids.split(",")
+            for part in self.admin_telegram_ids.split(",")
             if part.strip()
         }
-
-    @property
-    def ebay_api_enabled(self) -> bool:
-        return bool(self.ebay_app_id and self.ebay_cert_id)
 
 
 @lru_cache

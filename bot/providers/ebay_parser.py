@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+import logging
+import re
+from urllib.parse import urlencode
+
+import feedparser
+from bs4 import BeautifulSoup
+
+from bot.models import Listing, Search, Source
+from bot.providers.base import BaseProvider, ProviderError
+from bot.providers.http_utils import (
+    build_client,
+    parse_price_text,
+    request_with_retries,
+    truncate,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class EbayParserProvider(BaseProvider):
+    source = Source.EBAY_PARSER
+
+    def __init__(self, *, proxy: str | None = None) -> None:
+        self._client = build_client(proxy)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def search(self, search: Search, *, limit: int = 20) -> list[Listing]:
+        try:
+            listings = await self._search_rss(search, limit=limit)
+            if listings:
+                return listings
+            logger.info("eBay RSS empty for %r, falling back to HTML", search.keywords)
+            return await self._search_html(search, limit=limit)
+        except Exception as exc:
+            raise ProviderError(f"eBay parser failed: {exc}") from exc
+
+    def _build_params(self, search: Search) -> dict[str, str]:
+        params: dict[str, str] = {
+            "_nkw": search.keywords,
+            "_sop": "10",  # newly listed
+            "rt": "nc",
+        }
+        if search.min_price is not None:
+            params["_udlo"] = str(search.min_price)
+        if search.max_price is not None:
+            params["_udhi"] = str(search.max_price)
+        if search.buy_it_now:
+            params["LH_BIN"] = "1"
+        if search.condition:
+            # eBay condition IDs often passed as LH_ItemCondition
+            params["LH_ItemCondition"] = search.condition
+        return params
+
+    async def _search_rss(self, search: Search, *, limit: int) -> list[Listing]:
+        params = self._build_params(search)
+        params["_rss"] = "1"
+        url = f"https://www.ebay.com/sch/i.html?{urlencode(params)}"
+        response = await request_with_retries(
+            self._client, "GET", url, min_delay=2.0, max_delay=5.0
+        )
+        response.raise_for_status()
+        feed = feedparser.parse(response.text)
+        listings: list[Listing] = []
+        for entry in feed.entries[:limit]:
+            link = getattr(entry, "link", "") or ""
+            title = getattr(entry, "title", "") or "Untitled"
+            item_id = _extract_ebay_item_id(link)
+            if not item_id:
+                continue
+            summary = getattr(entry, "summary", "") or getattr(entry, "description", "") or ""
+            price, currency = _extract_price_from_summary(summary)
+            image_url = _extract_image_from_summary(summary)
+            description = truncate(f"{title}. {_strip_html(summary)}", 450)
+            listings.append(
+                Listing(
+                    id=item_id,
+                    title=title.strip(),
+                    description=description,
+                    price=price,
+                    currency=currency,
+                    image_url=image_url,
+                    item_url=link.split("?")[0],
+                    source=Source.EBAY_PARSER,
+                )
+            )
+        return listings
+
+    async def _search_html(self, search: Search, *, limit: int) -> list[Listing]:
+        params = self._build_params(search)
+        params["_ipg"] = str(min(max(limit, 20), 60))
+        url = f"https://www.ebay.com/sch/i.html?{urlencode(params)}"
+        response = await request_with_retries(
+            self._client, "GET", url, min_delay=2.0, max_delay=5.0
+        )
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "lxml")
+        listings: list[Listing] = []
+        for item in soup.select("li.s-item"):
+            if len(listings) >= limit:
+                break
+            link = item.select_one("a.s-item__link")
+            title_el = item.select_one(".s-item__title")
+            if not link or not title_el:
+                continue
+            href = link.get("href") or ""
+            title = title_el.get_text(" ", strip=True)
+            if not href or not title or title.lower().startswith("shop on ebay"):
+                continue
+            item_id = _extract_ebay_item_id(href)
+            if not item_id:
+                continue
+            price_el = item.select_one(".s-item__price")
+            subtitle_el = item.select_one(".s-item__subtitle")
+            image_el = item.select_one("img")
+            price, currency = parse_price_text(
+                price_el.get_text(" ", strip=True) if price_el else ""
+            )
+            subtitle = subtitle_el.get_text(" ", strip=True) if subtitle_el else ""
+            description = truncate(f"{title}. {subtitle}".strip(". "), 450)
+            listings.append(
+                Listing(
+                    id=item_id,
+                    title=title,
+                    description=description,
+                    price=price,
+                    currency=currency,
+                    image_url=image_el.get("src") if image_el else None,
+                    item_url=href.split("?")[0],
+                    source=Source.EBAY_PARSER,
+                )
+            )
+        return listings
+
+
+def _extract_ebay_item_id(url: str) -> str | None:
+    match = re.search(r"/itm/(?:[^/]+/)?(\d+)", url)
+    if match:
+        return match.group(1)
+    match = re.search(r"[?&]item=(\d+)", url)
+    return match.group(1) if match else None
+
+
+def _strip_html(text: str) -> str:
+    return BeautifulSoup(text or "", "lxml").get_text(" ", strip=True)
+
+
+def _extract_price_from_summary(summary: str) -> tuple[float | None, str | None]:
+    text = _strip_html(summary)
+    return parse_price_text(text)
+
+
+def _extract_image_from_summary(summary: str) -> str | None:
+    soup = BeautifulSoup(summary or "", "lxml")
+    img = soup.select_one("img")
+    if not img:
+        return None
+    return img.get("src") or img.get("data-src")

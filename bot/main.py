@@ -4,36 +4,21 @@ import asyncio
 import logging
 import sys
 
-from collections.abc import Awaitable, Callable
-from typing import Any
-
-from aiogram import BaseMiddleware, Bot, Dispatcher
+import uvicorn
+from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import TelegramObject
 
 from bot.config import get_settings
+from bot.crypto import CredentialsCrypto
 from bot.db import Database
-from bot.handlers import router
-from bot.middlewares import AccessMiddleware
-from bot.watcher import WatcherService
-
-
-class InjectMiddleware(BaseMiddleware):
-    """Прокидывает зависимости в хендлеры через data."""
-
-    def __init__(self, **deps: Any) -> None:
-        self.deps = deps
-
-    async def __call__(
-        self,
-        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
-        event: TelegramObject,
-        data: dict[str, Any],
-    ) -> Any:
-        data.update(self.deps)
-        return await handler(event, data)
+from bot.handlers import build_root_router
+from bot.middlewares import AccessMiddleware, InjectMiddleware
+from bot.services.cleanup import CleanupService
+from bot.services.credentials import CredentialsService
+from bot.services.poller import PollerService
+from bot.web.app import create_app
 
 
 async def main() -> None:
@@ -48,34 +33,59 @@ async def main() -> None:
     db = Database(settings.database_path)
     await db.connect()
 
+    crypto = CredentialsCrypto(settings.credentials_encryption_key)
+    credentials = CredentialsService(db, crypto)
+
     bot = Bot(
         token=settings.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=MemoryStorage())
-    dp.update.middleware(AccessMiddleware(settings.allowed_ids))
-    dp.update.middleware(InjectMiddleware(db=db, settings=settings))
-    dp.include_router(router)
-
-    watcher = WatcherService(
+    poller = PollerService(
         bot,
         db,
-        interval_seconds=settings.watch_poll_interval_seconds,
-        ebay_app_id=settings.ebay_app_id,
-        ebay_cert_id=settings.ebay_cert_id,
-        ebay_marketplace_id=settings.ebay_marketplace_id,
+        credentials,
+        interval_sec=settings.poll_interval_sec,
+        proxy=settings.http_proxy or None,
     )
-    watcher.start()
+    cleanup = CleanupService(db, ttl_days=settings.seen_items_ttl_days)
 
-    logger.info(
-        "Starting bot (ebay_api=%s, poll=%ss)",
-        settings.ebay_api_enabled,
-        settings.watch_poll_interval_seconds,
+    dp.update.middleware(InjectMiddleware(
+        db=db,
+        settings=settings,
+        credentials=credentials,
+        poller=poller,
+    ))
+    dp.update.middleware(AccessMiddleware(settings.admin_ids))
+    dp.include_router(build_root_router())
+
+    app = create_app(db, settings.public_base_url)
+    config = uvicorn.Config(
+        app,
+        host=settings.web_host,
+        port=settings.web_port,
+        log_level=settings.log_level.lower(),
+        loop="asyncio",
     )
+    server = uvicorn.Server(config)
+
+    poller.start()
+    cleanup.start()
+    logger.info(
+        "Starting bot+web (poll=%ss, web=%s:%s)",
+        settings.poll_interval_sec,
+        settings.web_host,
+        settings.web_port,
+    )
+
     try:
-        await dp.start_polling(bot)
+        await asyncio.gather(
+            dp.start_polling(bot),
+            server.serve(),
+        )
     finally:
-        await watcher.stop()
+        await poller.stop()
+        await cleanup.stop()
         await db.close()
         await bot.session.close()
 

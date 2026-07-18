@@ -6,3 +6,7 @@ pydantic-settings>=2.5,<3
 python-dotenv>=1.0,<2
 beautifulsoup4>=4.12,<5
 lxml>=5.0,<6
+feedparser>=6.0,<7
+cryptography>=43.0,<47
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1

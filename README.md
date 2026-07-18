@@ -1,15 +1,17 @@
-# Telegram-бот для eBay и Poshmark
+# Telegram-бот мониторинга eBay + Poshmark
 
-Бот ищет лоты на eBay / Poshmark и присылает уведомления о новых совпадениях по подпискам.
+Мультипользовательский бот: заявки на доступ, мастер настройки источников, зашифрованные eBay API ключи, поиски и карточки новых лотов.
 
 ## Возможности
 
-- `/search ebay|poshmark <запрос> [max=цена]` — разовый поиск
-- `/watch ebay|poshmark <запрос> [min=цена] [max=цена]` — подписка на новые лоты
-- `/watches` / `/unwatch <id>` — управление подписками
-- фоновый опрос выдачи и уведомления в Telegram
-- SQLite для подписок и уже виденных лотов
-- опциональный eBay Browse API; без ключей — HTML-поиск
+- Доступ: `pending → approved/rejected/blocked`, заявки админу
+- Источники: **eBay API**, **eBay Parser** (RSS + HTML), **Poshmark**
+- `/setup` — выбор источников, OAuth-проверка ключей, deletion URL
+- Поиски: `/add` `/list` `/edit` `/pause` `/resume` `/delete`
+- Карточки: фото, цена, описание, URL-кнопка
+- Поллер (`POLL_INTERVAL_SEC`, по умолчанию 5 мин), тихий первый прогон
+- Cleanup `seen_items` старше 90 дней
+- FastAPI: `GET/POST /ebay/deletion/{telegram_id}`
 
 ## Быстрый старт
 
@@ -18,34 +20,49 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# заполните TELEGRAM_BOT_TOKEN в .env
+```
+
+Сгенерируйте ключ шифрования:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Заполните в `.env`:
+
+- `TELEGRAM_BOT_TOKEN`
+- `ADMIN_TELEGRAM_IDS` (через запятую)
+- `CREDENTIALS_ENCRYPTION_KEY`
+- `PUBLIC_BASE_URL` (публичный HTTPS URL этого сервиса)
+
+Запуск (бот + webhook):
+
+```bash
 python -m bot
 ```
 
-## Переменные окружения
+## Команды
 
-| Переменная | Описание |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | токен от @BotFather |
-| `ALLOWED_USER_IDS` | опциональный allowlist user id |
-| `WATCH_POLL_INTERVAL_SECONDS` | интервал опроса (по умолчанию 120) |
-| `EBAY_APP_ID` / `EBAY_CERT_ID` | ключи eBay API (опционально) |
-| `DATABASE_PATH` | путь к SQLite |
+**Пользователь:** `/start` `/setup` `/settings` `/add` `/list` `/edit` `/pause` `/resume` `/delete` `/keys_status` `/revoke_keys` `/help`
 
-## Архитектура
+**Админ:** `/users` `/approve` `/reject` `/block`
+
+## Структура
 
 ```
 bot/
-  main.py          # запуск polling + watcher
-  handlers.py      # команды Telegram
-  watcher.py       # фоновый мониторинг
-  parsers/         # eBay и Poshmark
-  db.py            # SQLite
-  formatting.py    # тексты сообщений
+  main.py           # polling + uvicorn
+  config.py
+  db.py / crypto.py / models.py
+  handlers/         # start, admin, setup, searches
+  providers/        # ebay_api, ebay_parser, poshmark
+  services/         # poller, cleanup, credentials
+  web/              # eBay deletion endpoint
 ```
 
 ## Замечания
 
-- Poshmark официального публичного API не даёт: используется разбор HTML, вёрстка может меняться.
-- Первый прогон подписки только запоминает текущую выдачу, без спама старыми лотами.
-- Для стабильного eBay лучше подключить Browse API.
+- Секреты eBay шифруются Fernet; ciphertext привязан к `telegram_id` (AAD).
+- Сообщения с Client Secret удаляются из чата.
+- Poshmark — HTML-парсер публичной выдачи (вёрстка может меняться).
+- Для Production eBay keyset укажите deletion URL и verification token из `/setup`.
