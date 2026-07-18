@@ -86,6 +86,21 @@ class Search:
     filters_json: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class PollLog:
+    id: int
+    telegram_id: int
+    search_id: int | None
+    source: Source
+    keywords: str
+    status: str  # ok | empty | seed | error
+    found: int
+    new_items: int
+    notified: int
+    message: str | None
+    created_at: str
+
+
 EBAY_MARKETPLACES = (
     "EBAY_US",
     "EBAY_GB",

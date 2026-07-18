@@ -20,6 +20,7 @@
     <nav class="tabs" role="tablist">
       <button class="tab active" data-tab="searches" type="button">Поиски</button>
       <button class="tab" data-tab="create" type="button">Новый</button>
+      <button class="tab" data-tab="logs" type="button">Лог</button>
       <button class="tab" data-tab="settings" type="button">Настройки</button>
     </nav>
 
@@ -58,6 +59,15 @@
           </label>
           <button class="primary" type="submit">Создать поиск</button>
         </form>
+      </section>
+
+      <section id="panel-logs" class="panel">
+        <p class="hint">Последние опросы источников по вашим поискам.</p>
+        <div id="logs-empty" class="empty hidden">
+          <p>Записей пока нет</p>
+          <p class="hint">Они появятся после первого цикла опроса (~5 мин).</p>
+        </div>
+        <div id="logs-list" class="list log-list"></div>
       </section>
 
       <section id="panel-settings" class="panel">

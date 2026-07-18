@@ -8,7 +8,7 @@ from typing import Any
 
 import aiosqlite
 
-from bot.models import Search, Source, User, UserStatus
+from bot.models import PollLog, Search, Source, User, UserStatus
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -56,10 +56,26 @@ CREATE TABLE IF NOT EXISTS seen_items (
     FOREIGN KEY (search_id) REFERENCES searches(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS poll_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    search_id INTEGER,
+    source TEXT NOT NULL,
+    keywords TEXT NOT NULL,
+    status TEXT NOT NULL,
+    found INTEGER NOT NULL DEFAULT 0,
+    new_items INTEGER NOT NULL DEFAULT 0,
+    notified INTEGER NOT NULL DEFAULT 0,
+    message TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (telegram_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
 CREATE INDEX IF NOT EXISTS idx_searches_user ON searches(telegram_id);
 CREATE INDEX IF NOT EXISTS idx_searches_active ON searches(paused, source);
 CREATE INDEX IF NOT EXISTS idx_seen_first_seen_at ON seen_items(first_seen_at);
+CREATE INDEX IF NOT EXISTS idx_poll_logs_user_created ON poll_logs(telegram_id, created_at DESC);
 """
 
 
@@ -440,6 +456,71 @@ class Database:
         await self.conn.commit()
         return cursor.rowcount
 
+    # --- poll logs ---
+
+    async def add_poll_log(
+        self,
+        telegram_id: int,
+        *,
+        search_id: int | None,
+        source: Source,
+        keywords: str,
+        status: str,
+        found: int = 0,
+        new_items: int = 0,
+        notified: int = 0,
+        message: str | None = None,
+        keep_last: int = 100,
+    ) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO poll_logs (
+                telegram_id, search_id, source, keywords, status,
+                found, new_items, notified, message, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                telegram_id,
+                search_id,
+                source.value,
+                keywords,
+                status,
+                found,
+                new_items,
+                notified,
+                (message or "")[:500] or None,
+                _utcnow(),
+            ),
+        )
+        # Храним только последние N записей пользователя
+        await self.conn.execute(
+            """
+            DELETE FROM poll_logs
+            WHERE telegram_id = ?
+              AND id NOT IN (
+                SELECT id FROM poll_logs
+                WHERE telegram_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+              )
+            """,
+            (telegram_id, telegram_id, keep_last),
+        )
+        await self.conn.commit()
+
+    async def list_poll_logs(self, telegram_id: int, *, limit: int = 40) -> list[PollLog]:
+        cursor = await self.conn.execute(
+            """
+            SELECT * FROM poll_logs
+            WHERE telegram_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (telegram_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [self._row_to_poll_log(row) for row in rows]
+
     # --- mappers ---
 
     @staticmethod
@@ -470,4 +551,20 @@ class Database:
             buy_it_now=bool(row["buy_it_now"]),
             paused=bool(row["paused"]),
             filters_json=json.loads(row["filters_json"] or "{}"),
+        )
+
+    @staticmethod
+    def _row_to_poll_log(row: aiosqlite.Row) -> PollLog:
+        return PollLog(
+            id=row["id"],
+            telegram_id=row["telegram_id"],
+            search_id=row["search_id"],
+            source=Source(row["source"]),
+            keywords=row["keywords"],
+            status=row["status"],
+            found=int(row["found"] or 0),
+            new_items=int(row["new_items"] or 0),
+            notified=int(row["notified"] or 0),
+            message=row["message"],
+            created_at=row["created_at"],
         )

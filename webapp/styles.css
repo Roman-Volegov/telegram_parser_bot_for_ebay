@@ -59,8 +59,8 @@ h1 {
 }
 .tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
   margin-bottom: 16px;
 }
 .tab, .ghost, .primary, .chip, .icon-btn {
@@ -72,8 +72,9 @@ h1 {
   background: var(--secondary);
   color: var(--hint);
   border-radius: 999px;
-  padding: 10px 12px;
+  padding: 10px 6px;
   border: 1px solid var(--border);
+  font-size: 13px;
 }
 .tab.active {
   background: var(--gold);
@@ -88,6 +89,44 @@ h1 {
   to { opacity: 1; transform: none; }
 }
 .list { display: grid; gap: 10px; }
+.log-list .log-item {
+  background: var(--secondary);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+}
+.log-item .log-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.log-item h3 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text);
+  font-weight: 650;
+}
+.log-item .log-time {
+  color: var(--hint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.log-item .log-msg {
+  margin: 8px 0 0;
+  color: var(--hint);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.badge.status-ok { color: #d8c07a; border-color: rgba(201, 162, 39, 0.45); }
+.badge.status-seed { color: #9ec0e6; border-color: rgba(120, 160, 210, 0.45); }
+.badge.status-empty { color: var(--hint); }
+.badge.status-error {
+  color: #f0b0b0;
+  border-color: rgba(196, 92, 92, 0.45);
+  background: rgba(196, 92, 92, 0.18);
+}
 .card {
   background: var(--secondary);
   border-radius: var(--radius);

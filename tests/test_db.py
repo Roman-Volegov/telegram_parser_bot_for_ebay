@@ -75,6 +75,29 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         await self.db.revoke_credentials(3)
         self.assertFalse(await self.db.has_credentials(3))
 
+    async def test_poll_logs_keep_last(self):
+        await self.db.upsert_pending_user(4, None, "C")
+        await self.db.set_user_status(4, UserStatus.APPROVED)
+        search = await self.db.add_search(4, Source.POSHMARK, "coat")
+        for i in range(5):
+            await self.db.add_poll_log(
+                4,
+                search_id=search.id,
+                source=Source.POSHMARK,
+                keywords="coat",
+                status="ok",
+                found=i,
+                new_items=0,
+                notified=0,
+                message=f"cycle {i}",
+                keep_last=3,
+            )
+        logs = await self.db.list_poll_logs(4, limit=10)
+        self.assertEqual(len(logs), 3)
+        self.assertEqual([item.found for item in logs], [4, 3, 2])
+        self.assertEqual(logs[0].status, "ok")
+        self.assertEqual(logs[0].keywords, "coat")
+
 
 if __name__ == "__main__":
     unittest.main()

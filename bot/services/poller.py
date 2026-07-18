@@ -66,8 +66,19 @@ class PollerService:
         for search in searches:
             try:
                 await self.process_search(search, notify=True)
-            except Exception:
+            except Exception as exc:
                 logger.exception("Failed search #%s", search.id)
+                try:
+                    await self.db.add_poll_log(
+                        search.telegram_id,
+                        search_id=search.id,
+                        source=search.source,
+                        keywords=search.keywords,
+                        status="error",
+                        message=str(exc)[:400],
+                    )
+                except Exception:
+                    logger.exception("Failed to write poll log for search #%s", search.id)
             await asyncio.sleep(1)
 
     async def process_search(self, search: Search, *, notify: bool) -> int:
@@ -79,14 +90,33 @@ class PollerService:
             return 0
         provider = await self._build_provider(user, search.source)
         try:
-            listings = await provider.search(search, limit=20)
-        except ProviderError as exc:
-            logger.warning("Provider error search #%s: %s", search.id, exc)
-            return 0
+            try:
+                listings = await provider.search(search, limit=20)
+            except ProviderError as exc:
+                logger.warning("Provider error search #%s: %s", search.id, exc)
+                await self.db.add_poll_log(
+                    search.telegram_id,
+                    search_id=search.id,
+                    source=search.source,
+                    keywords=search.keywords,
+                    status="error",
+                    message=str(exc)[:400],
+                )
+                return 0
         finally:
             await provider.aclose()
 
+        found = len(listings)
         if not listings:
+            await self.db.add_poll_log(
+                search.telegram_id,
+                search_id=search.id,
+                source=search.source,
+                keywords=search.keywords,
+                status="empty",
+                found=0,
+                message="Источник не вернул объявлений",
+            )
             return 0
 
         item_ids = [item.id for item in listings]
@@ -98,19 +128,51 @@ class PollerService:
             logger.info(
                 "Seeded search #%s with %s items (%s)",
                 search.id,
-                len(item_ids),
+                found,
                 search.source,
+            )
+            await self.db.add_poll_log(
+                search.telegram_id,
+                search_id=search.id,
+                source=search.source,
+                keywords=search.keywords,
+                status="seed",
+                found=found,
+                message="Первый опрос: объявления сохранены без уведомлений",
             )
             return 0
 
         if not new_ids:
+            await self.db.add_poll_log(
+                search.telegram_id,
+                search_id=search.id,
+                source=search.source,
+                keywords=search.keywords,
+                status="ok",
+                found=found,
+                new_items=0,
+                notified=0,
+                message="Новых объявлений нет",
+            )
             return 0
 
         new_set = set(new_ids)
         new_listings = [item for item in listings if item.id in new_set]
         await self.db.mark_seen(search.id, [item.id for item in new_listings])
+        new_count = len(new_listings)
 
         if not notify:
+            await self.db.add_poll_log(
+                search.telegram_id,
+                search_id=search.id,
+                source=search.source,
+                keywords=search.keywords,
+                status="ok",
+                found=found,
+                new_items=new_count,
+                notified=0,
+                message="Новые объявления отмечены без уведомлений",
+            )
             return 0
 
         sent = 0
@@ -126,6 +188,18 @@ class PollerService:
                     listing.id,
                 )
             await asyncio.sleep(0.35)
+
+        await self.db.add_poll_log(
+            search.telegram_id,
+            search_id=search.id,
+            source=search.source,
+            keywords=search.keywords,
+            status="ok",
+            found=found,
+            new_items=new_count,
+            notified=sent,
+            message="Опрос завершён" if sent else "Новые найдены, уведомления не отправлены",
+        )
         return sent
 
     async def _build_provider(self, user: User, source: Source) -> BaseProvider:

@@ -14,12 +14,22 @@
   const state = {
     me: null,
     searches: [],
+    logs: [],
+  };
+
+  const STATUS_LABELS = {
+    ok: "ок",
+    seed: "seed",
+    empty: "пусто",
+    error: "ошибка",
   };
 
   const els = {
     greeting: document.getElementById("greeting"),
     searchesList: document.getElementById("searches-list"),
     searchesEmpty: document.getElementById("searches-empty"),
+    logsList: document.getElementById("logs-list"),
+    logsEmpty: document.getElementById("logs-empty"),
     createSource: document.getElementById("create-source"),
     sourcesBox: document.getElementById("sources-box"),
     marketplace: document.getElementById("ebay-marketplace"),
@@ -75,6 +85,7 @@
       panel.classList.toggle("active", panel.id === `panel-${name}`);
     });
     if (name === "settings") syncEbayBlockVisibility();
+    if (name === "logs") loadLogs().catch((err) => toast(err.message));
   }
 
   function selectedSources() {
@@ -173,6 +184,54 @@
     });
   }
 
+  function formatLogTime(iso) {
+    if (!iso) return "";
+    const date = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : `${iso}Z`);
+    if (Number.isNaN(date.getTime())) return iso;
+    return date.toLocaleString("ru-RU", {
+      day: "2-digit",
+      month: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  function renderLogs() {
+    const items = state.logs;
+    els.logsEmpty.classList.toggle("hidden", items.length > 0);
+    els.logsList.innerHTML = "";
+    items.forEach((item) => {
+      const row = document.createElement("article");
+      row.className = "log-item";
+      const status = item.status || "ok";
+      const statusLabel = STATUS_LABELS[status] || status;
+      const counts = [
+        `найдено ${item.found ?? 0}`,
+        `новых ${item.new_items ?? 0}`,
+        `уведомл. ${item.notified ?? 0}`,
+      ].join(" · ");
+      row.innerHTML = `
+        <div class="log-head">
+          <h3>${escapeHtml(item.keywords || "—")}</h3>
+          <span class="log-time">${escapeHtml(formatLogTime(item.created_at))}</span>
+        </div>
+        <p class="meta">
+          <span class="badge status-${escapeHtml(status)}">${escapeHtml(statusLabel)}</span>
+          <span class="badge">${escapeHtml(item.source_label || item.source || "")}</span>
+          ${escapeHtml(counts)}
+        </p>
+        ${item.message ? `<p class="log-msg">${escapeHtml(item.message)}</p>` : ""}
+      `;
+      els.logsList.appendChild(row);
+    });
+  }
+
+  async function loadLogs() {
+    const data = await api("/poll-logs");
+    state.logs = data.items || [];
+    renderLogs();
+  }
+
   function escapeHtml(value) {
     return String(value)
       .replaceAll("&", "&amp;")
@@ -189,6 +248,7 @@
     const list = await api("/searches");
     state.searches = list.items || [];
     renderSearches();
+    await loadLogs();
   }
 
   document.querySelectorAll(".tab").forEach((btn) => {
@@ -329,7 +389,9 @@
 
   function initialTab() {
     const hash = (location.hash || "").replace("#", "");
-    if (hash === "settings" || hash === "create" || hash === "searches") return hash;
+    if (hash === "settings" || hash === "create" || hash === "searches" || hash === "logs") {
+      return hash;
+    }
     return null;
   }
 

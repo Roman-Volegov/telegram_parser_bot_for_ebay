@@ -124,6 +124,28 @@ def create_api_router(
             ]
         }
 
+    @router.get("/poll-logs")
+    async def api_list_poll_logs(user: User = Depends(current_user)) -> dict[str, Any]:
+        logs = await db.list_poll_logs(user.telegram_id, limit=40)
+        return {
+            "items": [
+                {
+                    "id": item.id,
+                    "search_id": item.search_id,
+                    "source": item.source.value,
+                    "source_label": SOURCE_LABELS[item.source],
+                    "keywords": item.keywords,
+                    "status": item.status,
+                    "found": item.found,
+                    "new_items": item.new_items,
+                    "notified": item.notified,
+                    "message": item.message,
+                    "created_at": item.created_at,
+                }
+                for item in logs
+            ]
+        }
+
     @router.post("/searches")
     async def api_create_search(
         payload: SearchCreateIn,
