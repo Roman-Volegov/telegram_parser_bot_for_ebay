@@ -194,42 +194,84 @@ a:hover {
 .bg__shooting {
   position: absolute;
   inset: 0;
+  overflow: hidden;
+  z-index: 1;
 }
 
 .bg__shooting span {
   position: absolute;
   top: 0;
   left: 0;
-  width: 90px;
-  height: 1.5px;
+  width: 140px;
+  height: 2px;
   border-radius: 999px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.95), transparent);
+  background: linear-gradient(
+    90deg,
+    #fff 0%,
+    rgba(255, 250, 230, 0.95) 12%,
+    rgba(255, 255, 255, 0.55) 45%,
+    rgba(180, 200, 255, 0.05) 82%,
+    transparent 100%
+  );
   opacity: 0;
-  transform: rotate(-32deg);
-  filter: drop-shadow(0 0 4px rgba(255, 245, 220, 0.8));
-  animation: shooting 9s linear infinite;
+  transform-origin: left center;
+  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.55));
+  animation: comet-fly 11s cubic-bezier(0.22, 0.6, 0.35, 1) infinite;
 }
 
+.bg__shooting span::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+  background: radial-gradient(circle, #fff 0%, rgba(255, 245, 210, 0.9) 40%, transparent 72%);
+  box-shadow:
+    0 0 8px 2px rgba(255, 250, 230, 0.85),
+    0 0 18px 4px rgba(190, 210, 255, 0.35);
+}
+
+.bg__shooting span::after {
+  content: "";
+  position: absolute;
+  inset: -3px 0 -3px 8%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 240, 200, 0.28) 0%,
+    rgba(160, 190, 255, 0.12) 55%,
+    transparent
+  );
+  filter: blur(3px);
+  opacity: 0.85;
+}
+
+/* Старт слева снизу → вверх направо */
 .bg__shooting span:nth-child(1) {
-  top: 12%;
-  left: 70%;
-  animation-delay: 1.2s;
+  top: 78%;
+  left: 4%;
+  width: 160px;
+  animation-delay: 1.4s;
+  animation-duration: 10.5s;
 }
 
 .bg__shooting span:nth-child(2) {
-  top: 28%;
-  left: 40%;
-  width: 70px;
-  animation-delay: 4.8s;
-  animation-duration: 11s;
+  top: 88%;
+  left: -2%;
+  width: 120px;
+  animation-delay: 5.2s;
+  animation-duration: 12.5s;
 }
 
 .bg__shooting span:nth-child(3) {
-  top: 8%;
-  left: 20%;
-  width: 110px;
-  animation-delay: 7.5s;
-  animation-duration: 10s;
+  top: 70%;
+  left: 12%;
+  width: 180px;
+  animation-delay: 8.4s;
+  animation-duration: 11.8s;
 }
 
 .bg__grain {
@@ -515,6 +557,32 @@ a:hover {
   to { transform: translate3d(3%, -2%, 0) scale(1.05); }
 }
 
+@keyframes moon-glow {
+  from {
+    transform: scale(1);
+    box-shadow:
+      0 0 20px rgba(240, 228, 190, 0.28),
+      0 0 50px rgba(200, 180, 120, 0.14),
+      0 0 100px rgba(160, 150, 110, 0.08),
+      inset -10px -8px 18px rgba(40, 35, 20, 0.28),
+      inset 8px 6px 14px rgba(255, 255, 255, 0.35);
+  }
+  to {
+    transform: scale(1.03);
+    box-shadow:
+      0 0 32px rgba(240, 228, 190, 0.42),
+      0 0 70px rgba(200, 180, 120, 0.22),
+      0 0 130px rgba(160, 150, 110, 0.12),
+      inset -10px -8px 18px rgba(40, 35, 20, 0.28),
+      inset 8px 6px 14px rgba(255, 255, 255, 0.35);
+  }
+}
+
+@keyframes moon-halo {
+  from { opacity: 0.65; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1.06); }
+}
+
 @keyframes twinkle-soft {
   from { opacity: 0.45; }
   to { opacity: 0.95; }
@@ -536,21 +604,26 @@ a:hover {
   }
 }
 
-@keyframes shooting {
-  0%, 88% {
+@keyframes comet-fly {
+  0%, 82% {
     opacity: 0;
-    transform: rotate(-32deg) translate3d(0, 0, 0);
+    transform: rotate(-38deg) translate3d(0, 0, 0) scaleX(0.35);
   }
-  90% {
+  84% {
+    opacity: 0.2;
+    transform: rotate(-38deg) translate3d(-30px, 22px, 0) scaleX(0.7);
+  }
+  88% {
     opacity: 1;
+    transform: rotate(-38deg) translate3d(-180px, 130px, 0) scaleX(1);
   }
-  96% {
-    opacity: 0;
-    transform: rotate(-32deg) translate3d(-420px, 280px, 0);
+  94% {
+    opacity: 0.55;
+    transform: rotate(-38deg) translate3d(-420px, 300px, 0) scaleX(1.15);
   }
-  100% {
+  98%, 100% {
     opacity: 0;
-    transform: rotate(-32deg) translate3d(-420px, 280px, 0);
+    transform: rotate(-38deg) translate3d(-520px, 370px, 0) scaleX(0.5);
   }
 }
 
@@ -565,6 +638,8 @@ a:hover {
   .hero__media img,
   .hero__glow,
   .bg__nebula,
+  .bg__moon,
+  .bg__moon::after,
   .bg__stars,
   .bg__shooting span,
   .bg__grain {
