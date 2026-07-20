@@ -16,7 +16,8 @@ from bot.models import (
     UserStatus,
 )
 from bot.providers.ebay_api import EbayApiProvider
-from bot.services.credentials import CredentialsService
+from bot.providers.etsy import EtsyProvider
+from bot.services.credentials import CredentialsService, normalize_etsy_api_key
 from bot.services.poller import PollerService
 from bot.web.telegram_auth import TelegramAuthError, validate_init_data
 
@@ -46,6 +47,8 @@ class SetupIn(BaseModel):
     ebay_marketplace: str = "EBAY_US"
     ebay_client_id: str | None = None
     ebay_client_secret: str | None = None
+    etsy_keystring: str | None = None
+    etsy_shared_secret: str | None = None
 
 
 def create_api_router(
@@ -82,6 +85,7 @@ def create_api_router(
 
     async def _settings_payload(user: User) -> dict[str, Any]:
         has_keys = await db.has_credentials(user.telegram_id)
+        has_etsy_keys = await db.has_etsy_credentials(user.telegram_id)
         deletion_token = None
         deletion_url = None
         if has_keys or Source.EBAY_API in user.enabled_sources:
@@ -99,6 +103,7 @@ def create_api_router(
             "ebay_marketplaces": list(EBAY_MARKETPLACES),
             "ebay_marketplace_labels": dict(EBAY_MARKETPLACE_LABELS),
             "has_ebay_keys": has_keys,
+            "has_etsy_keys": has_etsy_keys,
             "deletion_url": deletion_url,
             "deletion_token": deletion_token,
             "ebay_checklist": [
@@ -107,6 +112,12 @@ def create_api_router(
                 "Скопируйте App ID (Client ID) и Cert ID (Client Secret)",
                 "Для Production укажите Marketplace Account Deletion URL и token ниже",
                 "Scope: https://api.ebay.com/oauth/api_scope",
+            ],
+            "etsy_checklist": [
+                "Зайдите на https://www.etsy.com/developers/your-apps",
+                "Создайте приложение (Open API v3)",
+                "Скопируйте Keystring и Shared Secret",
+                "Ключ хранится на сервере в зашифрованном виде",
             ],
         }
 
@@ -299,6 +310,13 @@ def create_api_router(
         wants_api = Source.EBAY_API in payload.enabled_sources
         has_keys = await db.has_credentials(user.telegram_id)
 
+        etsy_keystring = (payload.etsy_keystring or "").strip()
+        etsy_secret = (payload.etsy_shared_secret or "").strip()
+        wants_etsy = Source.ETSY in payload.enabled_sources
+        has_etsy_keys = await db.has_etsy_credentials(user.telegram_id)
+        etsy_api_key = normalize_etsy_api_key(etsy_keystring, etsy_secret)
+        etsy_verified = False
+
         if wants_api:
             if client_id and client_secret:
                 provider = EbayApiProvider(
@@ -327,6 +345,38 @@ def create_api_router(
                     detail="Для eBay API укажите Client ID и Client Secret",
                 )
 
+        if wants_etsy:
+            if etsy_api_key:
+                provider = EtsyProvider(
+                    proxy=http_proxy or None,
+                    api_key=etsy_api_key,
+                )
+                try:
+                    await provider.verify_credentials()
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Etsy API ключ не принят: {exc}",
+                    ) from exc
+                finally:
+                    await provider.aclose()
+                try:
+                    await credentials.save_etsy_key(
+                        user.telegram_id, etsy_keystring, etsy_secret
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                has_etsy_keys = True
+                etsy_verified = True
+            elif not has_etsy_keys:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Для Etsy укажите Keystring и Shared Secret "
+                        "(developers.etsy.com)"
+                    ),
+                )
+
         await db.save_setup(
             user.telegram_id,
             enabled_sources=payload.enabled_sources,
@@ -338,6 +388,7 @@ def create_api_router(
         result = await _settings_payload(user)
         result["ok"] = True
         result["oauth_verified"] = bool(client_id and client_secret and wants_api)
+        result["etsy_verified"] = etsy_verified
         return result
 
     @router.delete("/keys")
@@ -348,6 +399,21 @@ def create_api_router(
         assert fresh is not None
         if Source.EBAY_API in fresh.enabled_sources:
             remaining = [s for s in fresh.enabled_sources if s is not Source.EBAY_API]
+            await db.save_setup(
+                fresh.telegram_id,
+                enabled_sources=remaining,
+                ebay_marketplace=fresh.ebay_marketplace,
+                setup_completed=bool(remaining) and fresh.setup_completed,
+            )
+        return {"ok": True, "removed": removed}
+
+    @router.delete("/keys/etsy")
+    async def api_revoke_etsy_keys(user: User = Depends(current_user)) -> dict[str, Any]:
+        removed = await credentials.revoke_etsy(user.telegram_id)
+        fresh = await db.get_user(user.telegram_id)
+        assert fresh is not None
+        if Source.ETSY in fresh.enabled_sources:
+            remaining = [s for s in fresh.enabled_sources if s is not Source.ETSY]
             await db.save_setup(
                 fresh.telegram_id,
                 enabled_sources=remaining,

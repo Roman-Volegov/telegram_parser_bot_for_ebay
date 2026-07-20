@@ -26,8 +26,9 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE TABLE IF NOT EXISTS credentials (
     telegram_id INTEGER PRIMARY KEY,
-    ebay_client_id_enc TEXT NOT NULL,
-    ebay_client_secret_enc TEXT NOT NULL,
+    ebay_client_id_enc TEXT,
+    ebay_client_secret_enc TEXT,
+    etsy_api_key_enc TEXT,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (telegram_id) REFERENCES users(telegram_id) ON DELETE CASCADE
 );
@@ -94,7 +95,17 @@ class Database:
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA foreign_keys = ON")
         await self._conn.executescript(SCHEMA)
+        await self._migrate_schema()
         await self._conn.commit()
+
+    async def _migrate_schema(self) -> None:
+        """Добавляет новые колонки в уже существующие БД."""
+        cursor = await self.conn.execute("PRAGMA table_info(credentials)")
+        cols = {row[1] for row in await cursor.fetchall()}
+        if "etsy_api_key_enc" not in cols:
+            await self.conn.execute(
+                "ALTER TABLE credentials ADD COLUMN etsy_api_key_enc TEXT"
+            )
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -230,14 +241,34 @@ class Database:
         now = _utcnow()
         await self.conn.execute(
             """
-            INSERT INTO credentials (telegram_id, ebay_client_id_enc, ebay_client_secret_enc, updated_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO credentials (
+                telegram_id, ebay_client_id_enc, ebay_client_secret_enc,
+                etsy_api_key_enc, updated_at
+            )
+            VALUES (?, ?, ?, NULL, ?)
             ON CONFLICT(telegram_id) DO UPDATE SET
                 ebay_client_id_enc = excluded.ebay_client_id_enc,
                 ebay_client_secret_enc = excluded.ebay_client_secret_enc,
                 updated_at = excluded.updated_at
             """,
             (telegram_id, client_id_enc, client_secret_enc, now),
+        )
+        await self.conn.commit()
+
+    async def save_etsy_credentials(self, telegram_id: int, api_key_enc: str) -> None:
+        now = _utcnow()
+        await self.conn.execute(
+            """
+            INSERT INTO credentials (
+                telegram_id, ebay_client_id_enc, ebay_client_secret_enc,
+                etsy_api_key_enc, updated_at
+            )
+            VALUES (?, '', '', ?, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET
+                etsy_api_key_enc = excluded.etsy_api_key_enc,
+                updated_at = excluded.updated_at
+            """,
+            (telegram_id, api_key_enc, now),
         )
         await self.conn.commit()
 
@@ -252,18 +283,85 @@ class Database:
         row = await cursor.fetchone()
         if row is None:
             return None
-        return row["ebay_client_id_enc"], row["ebay_client_secret_enc"]
+        client_id = row["ebay_client_id_enc"]
+        client_secret = row["ebay_client_secret_enc"]
+        if not client_id or not client_secret:
+            return None
+        return client_id, client_secret
+
+    async def get_etsy_credentials_enc(self, telegram_id: int) -> str | None:
+        cursor = await self.conn.execute(
+            """
+            SELECT etsy_api_key_enc FROM credentials WHERE telegram_id = ?
+            """,
+            (telegram_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        value = row["etsy_api_key_enc"]
+        return value if value else None
 
     async def has_credentials(self, telegram_id: int) -> bool:
         return await self.get_credentials_enc(telegram_id) is not None
 
+    async def has_etsy_credentials(self, telegram_id: int) -> bool:
+        return await self.get_etsy_credentials_enc(telegram_id) is not None
+
     async def revoke_credentials(self, telegram_id: int) -> bool:
+        """Удаляет только eBay-ключи; строка остаётся, если есть Etsy."""
         cursor = await self.conn.execute(
-            "DELETE FROM credentials WHERE telegram_id = ?",
-            (telegram_id,),
+            """
+            UPDATE credentials
+            SET ebay_client_id_enc = NULL,
+                ebay_client_secret_enc = NULL,
+                updated_at = ?
+            WHERE telegram_id = ?
+            """,
+            (_utcnow(), telegram_id),
         )
         await self.conn.commit()
-        return cursor.rowcount > 0
+        if cursor.rowcount <= 0:
+            return False
+        await self._cleanup_empty_credentials(telegram_id)
+        return True
+
+    async def revoke_etsy_credentials(self, telegram_id: int) -> bool:
+        cursor = await self.conn.execute(
+            """
+            UPDATE credentials
+            SET etsy_api_key_enc = NULL, updated_at = ?
+            WHERE telegram_id = ?
+            """,
+            (_utcnow(), telegram_id),
+        )
+        await self.conn.commit()
+        if cursor.rowcount <= 0:
+            return False
+        await self._cleanup_empty_credentials(telegram_id)
+        return True
+
+    async def _cleanup_empty_credentials(self, telegram_id: int) -> None:
+        cursor = await self.conn.execute(
+            """
+            SELECT ebay_client_id_enc, ebay_client_secret_enc, etsy_api_key_enc
+            FROM credentials WHERE telegram_id = ?
+            """,
+            (telegram_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return
+        if (
+            not row["ebay_client_id_enc"]
+            and not row["ebay_client_secret_enc"]
+            and not row["etsy_api_key_enc"]
+        ):
+            await self.conn.execute(
+                "DELETE FROM credentials WHERE telegram_id = ?",
+                (telegram_id,),
+            )
+            await self.conn.commit()
 
     # --- searches ---
 

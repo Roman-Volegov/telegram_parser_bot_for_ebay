@@ -41,6 +41,11 @@
     ebayChecklist: document.getElementById("ebay-checklist"),
     ebayClientId: document.getElementById("ebay-client-id"),
     ebayClientSecret: document.getElementById("ebay-client-secret"),
+    etsyApiBlock: document.getElementById("etsy-api-block"),
+    etsyChecklist: document.getElementById("etsy-checklist"),
+    etsyKeystring: document.getElementById("etsy-keystring"),
+    etsySharedSecret: document.getElementById("etsy-shared-secret"),
+    etsyKeysStatus: document.getElementById("etsy-keys-status"),
     deletionBox: document.getElementById("deletion-box"),
     deletionUrl: document.getElementById("deletion-url"),
     deletionToken: document.getElementById("deletion-token"),
@@ -96,7 +101,10 @@
     document.querySelectorAll(".panel").forEach((panel) => {
       panel.classList.toggle("active", panel.id === `panel-${name}`);
     });
-    if (name === "settings") syncEbayBlockVisibility();
+    if (name === "settings") {
+      syncEbayBlockVisibility();
+      syncEtsyBlockVisibility();
+    }
     if (name === "logs") loadLogs().catch((err) => toast(err.message));
   }
 
@@ -107,6 +115,11 @@
   function syncEbayBlockVisibility() {
     const show = selectedSources().includes("ebay_api");
     els.ebayApiBlock.classList.toggle("hidden", !show);
+  }
+
+  function syncEtsyBlockVisibility() {
+    const show = selectedSources().includes("etsy");
+    els.etsyApiBlock.classList.toggle("hidden", !show);
   }
 
   function syncCreateSourceFields() {
@@ -157,7 +170,10 @@
       els.sourcesBox.appendChild(row);
     });
     els.sourcesBox.querySelectorAll("input").forEach((input) => {
-      input.addEventListener("change", syncEbayBlockVisibility);
+      input.addEventListener("change", () => {
+        syncEbayBlockVisibility();
+        syncEtsyBlockVisibility();
+      });
     });
 
     els.marketplace.innerHTML = "";
@@ -176,9 +192,20 @@
       els.ebayChecklist.appendChild(li);
     });
 
+    els.etsyChecklist.innerHTML = "";
+    (state.me.etsy_checklist || []).forEach((item) => {
+      const li = document.createElement("li");
+      li.textContent = item;
+      els.etsyChecklist.appendChild(li);
+    });
+
     els.keysStatus.textContent = state.me.has_ebay_keys
-      ? "🔑 Ключи сохранены (зашифрованы). Можно оставить поля пустыми — текущие ключи сохранятся."
-      : "🔑 Ключи ещё не заданы — заполните Client ID и Secret.";
+      ? "Ключи сохранены (зашифрованы). Можно оставить поля пустыми — текущие ключи сохранятся."
+      : "Ключи ещё не заданы — заполните Client ID и Secret.";
+
+    els.etsyKeysStatus.textContent = state.me.has_etsy_keys
+      ? "Ключ сохранён (зашифрован). Можно оставить поля пустыми — текущий ключ сохранится."
+      : "Ключ ещё не задан — заполните Keystring и Shared Secret.";
 
     if (state.me.deletion_url && state.me.deletion_token) {
       els.deletionBox.classList.remove("hidden");
@@ -188,9 +215,12 @@
       els.deletionBox.classList.add("hidden");
     }
 
+    syncEbayBlockVisibility();
+    syncEtsyBlockVisibility();
     els.ebayClientId.value = "";
     els.ebayClientSecret.value = "";
-    syncEbayBlockVisibility();
+    els.etsyKeystring.value = "";
+    els.etsySharedSecret.value = "";
   }
 
   function renderSearches() {
@@ -324,7 +354,22 @@
     if (!ok) return;
     try {
       await api("/keys", { method: "DELETE" });
-      toast("Ключи удалены");
+      toast("eBay ключи удалены");
+      await loadAll();
+      switchTab("settings");
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  document.getElementById("btn-revoke-etsy-keys").addEventListener("click", async () => {
+    const ok = tg?.showConfirm
+      ? await new Promise((resolve) => tg.showConfirm("Удалить Etsy API ключ?", resolve))
+      : window.confirm("Удалить Etsy API ключ?");
+    if (!ok) return;
+    try {
+      await api("/keys/etsy", { method: "DELETE" });
+      toast("Etsy ключ удалён");
       await loadAll();
       switchTab("settings");
     } catch (err) {
@@ -417,6 +462,12 @@
       if (clientId) payload.ebay_client_id = clientId;
       if (clientSecret) payload.ebay_client_secret = clientSecret;
     }
+    const etsyKey = els.etsyKeystring.value.trim();
+    const etsySecret = els.etsySharedSecret.value.trim();
+    if (enabled.includes("etsy")) {
+      if (etsyKey) payload.etsy_keystring = etsyKey;
+      if (etsySecret) payload.etsy_shared_secret = etsySecret;
+    }
     try {
       const result = await api("/setup", {
         method: "POST",
@@ -424,7 +475,10 @@
       });
       state.me = result;
       fillSettings();
-      toast(result.oauth_verified ? "OAuth ок, настройки сохранены" : "Настройки сохранены");
+      const bits = [];
+      if (result.oauth_verified) bits.push("eBay OAuth ок");
+      if (result.etsy_verified) bits.push("Etsy ключ ок");
+      toast(bits.length ? `${bits.join(", ")}, настройки сохранены` : "Настройки сохранены");
       tg?.HapticFeedback?.notificationOccurred("success");
       if (result.setup_completed) {
         const list = await api("/searches");

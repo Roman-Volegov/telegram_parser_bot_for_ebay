@@ -24,9 +24,6 @@ class Settings(BaseSettings):
     web_host: str = Field(default="0.0.0.0", alias="WEB_HOST")
     web_port: int = Field(default=8080, alias="WEB_PORT")
     http_proxy: str = Field(default="", alias="HTTP_PROXY")
-    # Etsy Open API v3: keystring:shared_secret (developers.etsy.com).
-    # Без ключа HTML-парсер с датацентрового VPS обычно ловит DataDome 403.
-    etsy_api_key: str = Field(default="", alias="ETSY_API_KEY")
 
     @field_validator("public_base_url")
     @classmethod

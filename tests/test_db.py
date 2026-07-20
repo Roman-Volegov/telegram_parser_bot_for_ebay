@@ -75,6 +75,27 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         await self.db.revoke_credentials(3)
         self.assertFalse(await self.db.has_credentials(3))
 
+    async def test_etsy_credentials_encrypted_storage(self):
+        await self.db.upsert_pending_user(6, None, "E")
+        await self.db.save_etsy_credentials(6, "enc-etsy")
+        self.assertTrue(await self.db.has_etsy_credentials(6))
+        self.assertEqual(await self.db.get_etsy_credentials_enc(6), "enc-etsy")
+        # eBay ключи независимы
+        self.assertFalse(await self.db.has_credentials(6))
+        await self.db.save_credentials(6, "enc-ebay-id", "enc-ebay-secret")
+        self.assertTrue(await self.db.has_credentials(6))
+        self.assertTrue(await self.db.has_etsy_credentials(6))
+        await self.db.revoke_etsy_credentials(6)
+        self.assertFalse(await self.db.has_etsy_credentials(6))
+        self.assertTrue(await self.db.has_credentials(6))
+        await self.db.revoke_credentials(6)
+        self.assertFalse(await self.db.has_credentials(6))
+        # пустая строка credentials удаляется
+        cursor = await self.db.conn.execute(
+            "SELECT 1 FROM credentials WHERE telegram_id = ?", (6,)
+        )
+        self.assertIsNone(await cursor.fetchone())
+
     async def test_poll_logs_clear_and_list(self):
         await self.db.upsert_pending_user(4, None, "C")
         await self.db.set_user_status(4, UserStatus.APPROVED)

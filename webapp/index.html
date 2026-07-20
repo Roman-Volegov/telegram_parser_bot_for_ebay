@@ -76,7 +76,7 @@
 
       <section id="panel-settings" class="panel">
         <form id="form-settings" class="form">
-          <p class="hint">Выберите источники. Для eBay API понадобятся ключи. Etsy с VPS может требовать HTTP_PROXY.</p>
+          <p class="hint">Выберите источники. Для eBay API и Etsy понадобятся ключи — они хранятся на сервере в зашифрованном виде.</p>
           <div id="sources-box" class="sources"></div>
 
           <div id="ebay-api-block" class="ebay-block hidden">
@@ -109,7 +109,23 @@
               <button type="button" class="chip" id="btn-copy-deletion">Скопировать URL + token</button>
             </div>
             <p id="keys-status" class="hint"></p>
-            <button type="button" class="chip danger" id="btn-revoke-keys">🗑 Удалить ключи</button>
+            <button type="button" class="chip danger" id="btn-revoke-keys">Удалить eBay ключи</button>
+          </div>
+
+          <div id="etsy-api-block" class="ebay-block hidden">
+            <h2 class="section-title">Etsy API</h2>
+            <ol id="etsy-checklist" class="checklist"></ol>
+            <label>
+              Keystring
+              <input id="etsy-keystring" type="text" autocomplete="off" placeholder="keystring" />
+            </label>
+            <label>
+              Shared Secret
+              <input id="etsy-shared-secret" type="password" autocomplete="off" placeholder="shared secret" />
+            </label>
+            <p class="hint">Ключ проверяется через Open API и сохраняется зашифрованным (как eBay).</p>
+            <p id="etsy-keys-status" class="hint"></p>
+            <button type="button" class="chip danger" id="btn-revoke-etsy-keys">Удалить Etsy ключ</button>
           </div>
 
           <button class="primary" type="submit">Сохранить настройки</button>

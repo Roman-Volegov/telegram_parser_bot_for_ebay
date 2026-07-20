@@ -86,6 +86,8 @@ bot/
 
 - Секреты eBay шифруются Fernet; ciphertext привязан к `telegram_id` (AAD).
 - Сообщения с Client Secret удаляются из чата.
-- Poshmark / Etsy — HTML-парсер публичной выдачи (вёрстка может меняться).
-  Etsy с датацентровых IP часто отвечает 403 — задайте `HTTP_PROXY` (residential).
+- Poshmark — HTML-парсер публичной выдачи (вёрстка может меняться).
+- Etsy — Open API v3; ключ (`keystring:shared_secret`) задаётся в Mini App и
+  хранится в БД зашифрованным (Fernet + AAD по `telegram_id`), как eBay.
+  HTML-fallback с датацентровых IP обычно ловит DataDome 403.
 - Для Production eBay keyset укажите deletion URL и verification token из `/setup`.

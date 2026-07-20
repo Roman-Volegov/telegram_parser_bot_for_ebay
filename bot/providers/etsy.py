@@ -77,8 +77,8 @@ class EtsyProvider(BaseProvider):
         if response.status_code in {401, 403}:
             detail = _api_error_detail(response)
             raise ProviderError(
-                "Etsy API отклонил ключ (проверьте ETSY_API_KEY = "
-                f"keystring:shared_secret). {detail}"
+                "Etsy API отклонил ключ (проверьте keystring:shared_secret). "
+                f"{detail}"
             )
         if response.status_code >= 400:
             detail = _api_error_detail(response)
@@ -93,6 +93,28 @@ class EtsyProvider(BaseProvider):
         if not listings:
             logger.warning("Etsy API returned 0 items for %r", search.keywords)
         return listings
+
+    async def verify_credentials(self) -> None:
+        """Лёгкая проверка ключа через Open API."""
+        if not self._api_key:
+            raise ProviderError("Etsy API key не задан")
+        try:
+            response = await self._client.get(
+                f"{ETSY_OPENAPI_BASE}/listings/active",
+                params={"limit": 1, "keywords": "test"},
+                headers={
+                    "Accept": "application/json",
+                    "x-api-key": self._api_key,
+                },
+            )
+        except Exception as exc:
+            raise ProviderError(f"Etsy API request failed: {exc}") from exc
+        if response.status_code in {401, 403}:
+            detail = _api_error_detail(response)
+            raise ProviderError(f"Etsy API ключ отклонён: {detail}")
+        if response.status_code >= 400:
+            detail = _api_error_detail(response)
+            raise ProviderError(f"Etsy API HTTP {response.status_code}: {detail}")
 
     async def _search_via_html(self, search: Search, *, limit: int) -> list[Listing]:
         query = search.keywords.strip()
@@ -122,8 +144,8 @@ class EtsyProvider(BaseProvider):
             if response.status_code == 403 or _looks_like_datadome(response.text):
                 raise ProviderError(
                     "Etsy HTML заблокирован DataDome (403). "
-                    "Добавьте ETSY_API_KEY (бесплатный ключ на developers.etsy.com) "
-                    "или HTTP_PROXY (residential)."
+                    "Сохраните Etsy API ключ в Mini App → Настройки "
+                    "(или HTTP_PROXY residential)."
                 )
             response.raise_for_status()
         except ProviderError:
