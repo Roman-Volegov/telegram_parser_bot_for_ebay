@@ -239,6 +239,11 @@ a:hover {
     grid-template-columns: repeat(3, 1fr);
     gap: 1.75rem;
   }
+
+  .sources--single {
+    grid-template-columns: 1fr;
+    max-width: 36rem;
+  }
 }
 
 .bullets {
