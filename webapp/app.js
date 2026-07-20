@@ -47,7 +47,16 @@
   };
 
   function initData() {
-    return tg?.initData || "";
+    return (tg?.initData || "").trim();
+  }
+
+  async function waitForInitData(timeoutMs = 2500) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      if (initData()) return initData();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return initData();
   }
 
   async function api(path, options = {}) {
@@ -388,6 +397,11 @@
   }
 
   function initialTab() {
+    const params = new URLSearchParams(location.search || "");
+    const fromQuery = (params.get("tab") || "").trim();
+    if (["settings", "create", "searches", "logs"].includes(fromQuery)) {
+      return fromQuery;
+    }
     const hash = (location.hash || "").replace("#", "");
     if (hash === "settings" || hash === "create" || hash === "searches" || hash === "logs") {
       return hash;
@@ -395,7 +409,15 @@
     return null;
   }
 
-  loadAll()
+  waitForInitData()
+    .then((data) => {
+      if (!data) {
+        throw new Error(
+          "Нет данных Telegram (initData). Откройте приложение кнопкой «⚙️ Настройки» внутри бота, не через браузер."
+        );
+      }
+      return loadAll();
+    })
     .then(() => {
       const tab = initialTab() || (!state.me.setup_completed ? "settings" : "searches");
       switchTab(tab);

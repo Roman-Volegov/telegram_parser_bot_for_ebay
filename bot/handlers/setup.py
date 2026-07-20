@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
 from bot.config import Settings
-from bot.menu import Btn, menu_kb, webapp_url_from_base
+from bot.menu import Btn, menu_kb, settings_webapp_url, webapp_url_from_base
 from bot.models import User
 
 router = Router(name="setup")
@@ -16,13 +16,12 @@ def _open_settings_kb(settings: Settings) -> InlineKeyboardMarkup | None:
     url = webapp_url_from_base(settings.public_base_url)
     if not url.startswith("https://"):
         return None
-    # Открываем сразу вкладку настроек через hash — фронт это подхватит
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="⚙️ Открыть настройки",
-                    web_app=WebAppInfo(url=f"{url}#settings"),
+                    web_app=WebAppInfo(url=settings_webapp_url(url)),
                 )
             ]
         ]

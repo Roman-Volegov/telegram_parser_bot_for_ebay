@@ -50,8 +50,11 @@ ADMIN_EXTRA_COMMANDS = [
 
 
 def settings_webapp_url(webapp_url: str) -> str:
-    base = webapp_url.split("#", 1)[0]
-    return f"{base}#settings"
+    """URL Mini App. Без #fragment — иначе часть клиентов Telegram не передаёт initData."""
+    base = webapp_url.split("#", 1)[0].split("?", 1)[0]
+    if not base.endswith("/"):
+        base = f"{base}/"
+    return f"{base}?tab=settings"
 
 
 def main_menu_kb(*, is_admin: bool = False, webapp_url: str | None = None) -> ReplyKeyboardMarkup:
