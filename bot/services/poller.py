@@ -24,12 +24,14 @@ class PollerService:
         *,
         interval_sec: int,
         proxy: str | None = None,
+        etsy_api_key: str | None = None,
     ) -> None:
         self.bot = bot
         self.db = db
         self.credentials = credentials
         self.interval_sec = interval_sec
         self.proxy = proxy
+        self.etsy_api_key = etsy_api_key
         self._task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
 
@@ -205,4 +207,7 @@ class PollerService:
                 proxy=self.proxy or None,
                 marketplace_id=search.marketplace or user.ebay_marketplace,
             )
-        return get_provider(search.source, proxy=self.proxy or None)
+        kwargs: dict = {"proxy": self.proxy or None}
+        if search.source is Source.ETSY:
+            kwargs["api_key"] = self.etsy_api_key or None
+        return get_provider(search.source, **kwargs)

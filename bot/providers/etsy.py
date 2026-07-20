@@ -4,8 +4,10 @@ import asyncio
 import json
 import logging
 import re
+from typing import Any
 from urllib.parse import urlencode
 
+import httpx
 from bs4 import BeautifulSoup
 
 from bot.models import Listing, Search, Source
@@ -20,11 +22,19 @@ from bot.providers.listing_meta import parse_shipping_info
 
 logger = logging.getLogger(__name__)
 
+ETSY_OPENAPI_BASE = "https://openapi.etsy.com/v3/application"
+
 
 class EtsyProvider(BaseProvider):
     source = Source.ETSY
 
-    def __init__(self, *, proxy: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        proxy: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        self._api_key = (api_key or "").strip() or None
         self._client = build_client(proxy)
         self._warmed = False
 
@@ -35,6 +45,57 @@ class EtsyProvider(BaseProvider):
         query = search.keywords.strip()
         if not query:
             return []
+        if self._api_key:
+            return await self._search_via_api(search, limit=limit)
+        return await self._search_via_html(search, limit=limit)
+
+    async def _search_via_api(self, search: Search, *, limit: int) -> list[Listing]:
+        params: dict[str, str | int | float] = {
+            "keywords": search.keywords.strip(),
+            "limit": min(max(limit, 1), 100),
+            "sort_on": "created",
+            "sort_order": "desc",
+            "includes": "Images",
+        }
+        if search.min_price is not None:
+            params["min_price"] = search.min_price
+        if search.max_price is not None:
+            params["max_price"] = search.max_price
+        url = f"{ETSY_OPENAPI_BASE}/listings/active"
+        try:
+            response = await self._client.get(
+                url,
+                params=params,
+                headers={
+                    "Accept": "application/json",
+                    "x-api-key": self._api_key or "",
+                },
+            )
+        except Exception as exc:
+            raise ProviderError(f"Etsy API request failed: {exc}") from exc
+
+        if response.status_code in {401, 403}:
+            detail = _api_error_detail(response)
+            raise ProviderError(
+                "Etsy API отклонил ключ (проверьте ETSY_API_KEY = "
+                f"keystring:shared_secret). {detail}"
+            )
+        if response.status_code >= 400:
+            detail = _api_error_detail(response)
+            raise ProviderError(f"Etsy API HTTP {response.status_code}: {detail}")
+
+        try:
+            payload = response.json()
+        except Exception as exc:
+            raise ProviderError(f"Etsy API: невалидный JSON: {exc}") from exc
+
+        listings = _parse_api_listings(payload, limit=limit)
+        if not listings:
+            logger.warning("Etsy API returned 0 items for %r", search.keywords)
+        return listings
+
+    async def _search_via_html(self, search: Search, *, limit: int) -> list[Listing]:
+        query = search.keywords.strip()
         params: dict[str, str] = {
             "q": query,
             "order": "date_desc",
@@ -58,10 +119,11 @@ class EtsyProvider(BaseProvider):
                     "Sec-Fetch-Site": "same-origin",
                 },
             )
-            if response.status_code == 403:
+            if response.status_code == 403 or _looks_like_datadome(response.text):
                 raise ProviderError(
-                    "Etsy вернул 403 (антибот). Для парсера нужен HTTP_PROXY "
-                    "(желательно residential)."
+                    "Etsy HTML заблокирован DataDome (403). "
+                    "Добавьте ETSY_API_KEY (бесплатный ключ на developers.etsy.com) "
+                    "или HTTP_PROXY (residential)."
                 )
             response.raise_for_status()
         except ProviderError:
@@ -74,7 +136,7 @@ class EtsyProvider(BaseProvider):
             logger.warning("Etsy returned 0 items for %r", query)
             return []
 
-        # Доставка обычно только на странице лота
+        # Доставка обычно только на странице лота (HTML); при 403 пропускаем
         sem = asyncio.Semaphore(5)
 
         async def enrich(item: Listing) -> Listing:
@@ -126,6 +188,97 @@ class EtsyProvider(BaseProvider):
         except Exception as exc:
             logger.debug("Etsy shipping enrich failed for %s: %s", listing.id, exc)
             return listing
+
+
+def _api_error_detail(response: httpx.Response) -> str:
+    try:
+        data = response.json()
+        if isinstance(data, dict):
+            return str(data.get("error") or data.get("error_description") or data)[:240]
+    except Exception:
+        pass
+    return (response.text or "")[:240]
+
+
+def _looks_like_datadome(html: str) -> bool:
+    low = (html or "").lower()
+    return "datadome" in low or "please enable js and disable any ad blocker" in low
+
+
+def _parse_api_listings(payload: Any, *, limit: int) -> list[Listing]:
+    results = []
+    if isinstance(payload, dict):
+        results = payload.get("results") or []
+    if not isinstance(results, list):
+        return []
+
+    listings: list[Listing] = []
+    for item in results:
+        if len(listings) >= limit:
+            break
+        if not isinstance(item, dict):
+            continue
+        listing_id = item.get("listing_id")
+        if listing_id is None:
+            continue
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        price, currency = _price_from_api(item.get("price"))
+        url = str(item.get("url") or "").strip()
+        if not url:
+            url = f"https://www.etsy.com/listing/{listing_id}"
+        image_url = _image_from_api(item)
+        description = str(item.get("description") or title)
+        listings.append(
+            Listing(
+                id=str(listing_id),
+                title=title[:200],
+                description=truncate(description, 450),
+                price=price,
+                currency=currency or "USD",
+                image_url=image_url,
+                item_url=url.split("?")[0],
+                source=Source.ETSY,
+                shipping_currency=currency or "USD",
+            )
+        )
+    return listings
+
+
+def _price_from_api(price_obj: Any) -> tuple[float | None, str | None]:
+    if isinstance(price_obj, dict):
+        currency = price_obj.get("currency_code")
+        amount = price_obj.get("amount")
+        divisor = price_obj.get("divisor") or 100
+        try:
+            if amount is not None:
+                return float(amount) / float(divisor), str(currency) if currency else None
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None, str(currency) if currency else None
+    if isinstance(price_obj, (int, float, str)):
+        try:
+            return float(price_obj), None
+        except (TypeError, ValueError):
+            return None, None
+    return None, None
+
+
+def _image_from_api(item: dict[str, Any]) -> str | None:
+    images = item.get("images")
+    if isinstance(images, list) and images:
+        first = images[0]
+        if isinstance(first, dict):
+            for key in (
+                "url_570xN",
+                "url_fullxfull",
+                "url_75x75",
+                "url_170x135",
+            ):
+                value = first.get(key)
+                if value:
+                    return str(value)
+    return None
 
 
 def _parse_search_html(html: str, *, limit: int) -> list[Listing]:

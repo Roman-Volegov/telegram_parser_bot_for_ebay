@@ -56,11 +56,13 @@ async def request_with_retries(
     **kwargs,
 ) -> httpx.Response:
     last_exc: Exception | None = None
+    last_response: httpx.Response | None = None
     for attempt in range(retries):
         try:
             await asyncio.sleep(random.uniform(min_delay, max_delay))
             response = await client.request(method, url, **kwargs)
             if response.status_code in {403, 429, 503}:
+                last_response = response
                 wait = 2 ** attempt + random.uniform(0.5, 1.5)
                 logger.warning(
                     "HTTP %s for %s, retry in %.1fs",
@@ -76,6 +78,8 @@ async def request_with_retries(
             wait = 2 ** attempt + random.uniform(0.5, 1.5)
             logger.warning("HTTP error %s, retry in %.1fs", exc, wait)
             await asyncio.sleep(wait)
+    if last_response is not None:
+        return last_response
     if last_exc:
         raise last_exc
     raise RuntimeError(f"Failed request to {url}")

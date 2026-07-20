@@ -5,6 +5,7 @@ from bot.providers.ebay_parser import _extract_ebay_item_id, _parse_html_listing
 from bot.providers.etsy import (
     _extract_etsy_listing_id,
     _extract_shipping_from_detail,
+    _parse_api_listings,
     _parse_search_html,
 )
 from bot.providers.http_utils import BROWSER_HEADERS, parse_price_text, truncate
@@ -48,6 +49,28 @@ class HelpersTests(unittest.TestCase):
         self.assertEqual(items[0].title, "Vintage Necklace Gold")
         self.assertEqual(items[0].price, 24.5)
         self.assertEqual(items[0].source.value, "etsy")
+
+    def test_etsy_parse_api_listings(self):
+        payload = {
+            "count": 1,
+            "results": [
+                {
+                    "listing_id": 9876543210,
+                    "title": "Handmade Bag",
+                    "description": "Nice bag",
+                    "url": "https://www.etsy.com/listing/9876543210/handmade-bag",
+                    "price": {"amount": 1999, "divisor": 100, "currency_code": "USD"},
+                    "images": [{"url_570xN": "https://i.etsystatic.com/bag.jpg"}],
+                }
+            ],
+        }
+        items = _parse_api_listings(payload, limit=10)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].id, "9876543210")
+        self.assertEqual(items[0].title, "Handmade Bag")
+        self.assertEqual(items[0].price, 19.99)
+        self.assertEqual(items[0].currency, "USD")
+        self.assertEqual(items[0].image_url, "https://i.etsystatic.com/bag.jpg")
 
     def test_etsy_shipping_from_detail(self):
         html = """
