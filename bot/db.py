@@ -284,7 +284,7 @@ class Database:
         filters = dict(filters_json or {})
         if marketplace:
             filters["marketplace"] = marketplace
-        elif source is Source.POSHMARK:
+        elif source in {Source.POSHMARK, Source.ETSY}:
             filters.pop("marketplace", None)
         cursor = await self.conn.execute(
             """

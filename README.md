@@ -1,11 +1,11 @@
-# Telegram-бот мониторинга eBay + Poshmark
+# Telegram-бот мониторинга eBay + Poshmark + Etsy
 
 Мультипользовательский бот: заявки на доступ, мастер настройки источников, зашифрованные eBay API ключи, поиски и карточки новых лотов.
 
 ## Возможности
 
 - Доступ: `pending → approved/rejected/blocked`, заявки админу
-- Источники: **eBay API**, **eBay Parser** (RSS + HTML), **Poshmark**
+- Источники: **eBay API**, **eBay Parser** (RSS + HTML), **Poshmark**, **Etsy**
 - `/setup` — выбор источников, OAuth-проверка ключей, deletion URL
 - Поиски: `/add` `/list` `/edit` `/pause` `/resume` `/delete`
 - Карточки: фото, цена, описание, URL-кнопка
@@ -85,5 +85,6 @@ bot/
 
 - Секреты eBay шифруются Fernet; ciphertext привязан к `telegram_id` (AAD).
 - Сообщения с Client Secret удаляются из чата.
-- Poshmark — HTML-парсер публичной выдачи (вёрстка может меняться).
+- Poshmark / Etsy — HTML-парсер публичной выдачи (вёрстка может меняться).
+  Etsy с датацентровых IP часто отвечает 403 — задайте `HTTP_PROXY` (residential).
 - Для Production eBay keyset укажите deletion URL и verification token из `/setup`.

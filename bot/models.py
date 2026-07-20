@@ -16,13 +16,18 @@ class Source(StrEnum):
     EBAY_API = "ebay_api"
     EBAY_PARSER = "ebay_parser"
     POSHMARK = "poshmark"
+    ETSY = "etsy"
 
 
 SOURCE_LABELS = {
     Source.EBAY_API: "eBay API",
     Source.EBAY_PARSER: "eBay Parser",
     Source.POSHMARK: "Poshmark",
+    Source.ETSY: "Etsy",
 }
+
+# Источники без eBay-специфичных полей (Buy It Now / регион)
+NON_EBAY_SOURCES = frozenset({Source.POSHMARK, Source.ETSY})
 
 EBAY_MARKETPLACES = (
     "EBAY_US",
@@ -120,7 +125,7 @@ class Search:
 
     @property
     def marketplace(self) -> str | None:
-        """Регион eBay для этого поиска (None / не для Poshmark)."""
+        """Регион eBay для этого поиска (не для Poshmark/Etsy)."""
         value = self.filters_json.get("marketplace")
         if isinstance(value, str) and value in EBAY_MARKETPLACES:
             return value

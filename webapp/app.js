@@ -111,9 +111,9 @@
 
   function syncCreateSourceFields() {
     const source = els.createSource.value;
-    const isPosh = source === "poshmark";
-    els.createBinWrap.classList.toggle("hidden", isPosh);
-    els.createMarketplaceWrap.classList.toggle("hidden", isPosh);
+    const hideEbayFields = source === "poshmark" || source === "etsy";
+    els.createBinWrap.classList.toggle("hidden", hideEbayFields);
+    els.createMarketplaceWrap.classList.toggle("hidden", hideEbayFields);
   }
 
   function fillCreateMarketplace() {
@@ -370,7 +370,7 @@
       max_price: numOrNull(document.getElementById("create-max").value),
       buy_it_now: document.getElementById("create-bin").checked,
     };
-    if (payload.source !== "poshmark") {
+    if (payload.source !== "poshmark" && payload.source !== "etsy") {
       payload.marketplace = els.createMarketplace.value;
     } else {
       payload.buy_it_now = false;

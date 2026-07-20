@@ -6,7 +6,15 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from bot.db import Database
-from bot.models import EBAY_MARKETPLACE_LABELS, EBAY_MARKETPLACES, SOURCE_LABELS, Source, User, UserStatus
+from bot.models import (
+    EBAY_MARKETPLACE_LABELS,
+    EBAY_MARKETPLACES,
+    NON_EBAY_SOURCES,
+    SOURCE_LABELS,
+    Source,
+    User,
+    UserStatus,
+)
 from bot.providers.ebay_api import EbayApiProvider
 from bot.services.credentials import CredentialsService
 from bot.services.poller import PollerService
@@ -166,7 +174,7 @@ def create_api_router(
 
         marketplace: str | None = None
         buy_it_now = payload.buy_it_now
-        if payload.source is Source.POSHMARK:
+        if payload.source in NON_EBAY_SOURCES:
             buy_it_now = False
             marketplace = None
         else:

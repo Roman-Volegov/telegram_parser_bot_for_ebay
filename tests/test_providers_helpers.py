@@ -2,8 +2,13 @@ import hashlib
 import unittest
 
 from bot.providers.ebay_parser import _extract_ebay_item_id, _parse_html_listings
+from bot.providers.etsy import (
+    _extract_etsy_listing_id,
+    _extract_shipping_from_detail,
+    _parse_search_html,
+)
 from bot.providers.http_utils import BROWSER_HEADERS, parse_price_text, truncate
-from bot.providers.poshmark import _extract_poshmark_id, _extract_shipping_from_detail
+from bot.providers.poshmark import _extract_poshmark_id, _extract_shipping_from_detail as _posh_ship
 from bot.handlers.searches import _parse_filters
 
 
@@ -17,6 +22,44 @@ class HelpersTests(unittest.TestCase):
             _extract_ebay_item_id("https://www.ebay.com/itm/placeholder/123456")
         )
 
+    def test_etsy_listing_id(self):
+        self.assertEqual(
+            _extract_etsy_listing_id(
+                "https://www.etsy.com/listing/1234567890/vintage-necklace?ref=x"
+            ),
+            "1234567890",
+        )
+
+    def test_etsy_parse_search_html(self):
+        html = """
+        <ul>
+          <li>
+            <a href="/listing/1234567890/vintage-necklace">
+              <img alt="Vintage Necklace Gold" />
+              <h3>Vintage Necklace Gold</h3>
+              <span class="currency-value">24.50</span>
+            </a>
+          </li>
+        </ul>
+        """
+        items = _parse_search_html(html, limit=10)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].id, "1234567890")
+        self.assertEqual(items[0].title, "Vintage Necklace Gold")
+        self.assertEqual(items[0].price, 24.5)
+        self.assertEqual(items[0].source.value, "etsy")
+
+    def test_etsy_shipping_from_detail(self):
+        html = """
+        <html><body>
+          <script>free_shipping_everywhere=true</script>
+          <div>Shipping: $4.99</div>
+        </body></html>
+        """
+        cost, currency, is_free = _extract_shipping_from_detail(html)
+        self.assertEqual(cost, 4.99)
+        self.assertFalse(is_free)
+
     def test_poshmark_shipping_from_detail(self):
         html = """
         <html><body>
@@ -24,10 +67,11 @@ class HelpersTests(unittest.TestCase):
           <div class="shipping"><span>$6.49 Shipping</span></div>
         </body></html>
         """
-        cost, currency, is_free = _extract_shipping_from_detail(html)
+        cost, currency, is_free = _posh_ship(html)
         self.assertEqual(cost, 6.49)
         self.assertEqual(currency, "USD")
         self.assertFalse(is_free)
+
 
     def test_browser_headers_look_like_chrome(self):
         self.assertIn("Chrome/131", BROWSER_HEADERS["User-Agent"])
