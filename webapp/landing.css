@@ -82,6 +82,49 @@ a:hover {
   animation: nebula-drift 28s ease-in-out infinite alternate;
 }
 
+/* Moon — top right */
+.bg__moon {
+  position: absolute;
+  top: clamp(1.5rem, 4vh, 3.5rem);
+  right: clamp(1.5rem, 6vw, 4.5rem);
+  width: clamp(72px, 11vw, 118px);
+  height: clamp(72px, 11vw, 118px);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 30%, #f7f1de 0%, #e8d9b0 28%, #cbb888 58%, #9a8a62 100%);
+  box-shadow:
+    0 0 24px rgba(240, 228, 190, 0.35),
+    0 0 60px rgba(200, 180, 120, 0.18),
+    0 0 120px rgba(160, 150, 110, 0.1),
+    inset -10px -8px 18px rgba(40, 35, 20, 0.28),
+    inset 8px 6px 14px rgba(255, 255, 255, 0.35);
+  animation: moon-glow 8s ease-in-out infinite alternate;
+  z-index: 2;
+}
+
+.bg__moon::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 62% 42%, rgba(90, 80, 55, 0.28) 0 7%, transparent 8%),
+    radial-gradient(circle at 38% 58%, rgba(90, 80, 55, 0.22) 0 5%, transparent 6%),
+    radial-gradient(circle at 52% 72%, rgba(90, 80, 55, 0.2) 0 4%, transparent 5%),
+    radial-gradient(circle at 28% 36%, rgba(90, 80, 55, 0.18) 0 3.5%, transparent 4.5%);
+  opacity: 0.9;
+}
+
+.bg__moon::after {
+  content: "";
+  position: absolute;
+  inset: -55%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(240, 225, 180, 0.22) 0%, rgba(240, 225, 180, 0.06) 38%, transparent 68%);
+  animation: moon-halo 10s ease-in-out infinite alternate;
+  z-index: -1;
+}
+
 .bg__stars {
   position: absolute;
   inset: 0;
