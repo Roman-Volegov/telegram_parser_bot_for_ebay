@@ -35,7 +35,6 @@ def parse_shipping_info(
         "free shipping" in lower
         or "бесплатн" in lower
         or lower in {"free", "бесплатно"}
-        or re.search(r"\bfree\b.*\bship", lower)
     ):
         return 0.0, None, True
     if "shipping not specified" in lower or "не указан" in lower:

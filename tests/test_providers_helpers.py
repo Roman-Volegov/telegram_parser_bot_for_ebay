@@ -18,7 +18,12 @@ class HelpersTests(unittest.TestCase):
         )
 
     def test_poshmark_shipping_from_detail(self):
-        html = '<div class="shipping"><span>$6.49 Shipping</span></div>'
+        html = """
+        <html><body>
+          <script>free_shipping_discount_enabled=true; shipping_fee=0</script>
+          <div class="shipping"><span>$6.49 Shipping</span></div>
+        </body></html>
+        """
         cost, currency, is_free = _extract_shipping_from_detail(html)
         self.assertEqual(cost, 6.49)
         self.assertEqual(currency, "USD")

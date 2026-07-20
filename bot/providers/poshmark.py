@@ -221,22 +221,35 @@ def _extract_shipping_near(anchor) -> tuple[float | None, str | None, bool]:
 
 def _extract_shipping_from_detail(html: str) -> tuple[float | None, str | None, bool]:
     soup = BeautifulSoup(html or "", "lxml")
-    # Видимый текст вида "$6.49 Shipping"
-    for node in soup.find_all(string=re.compile(r"ship", re.I)):
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+
+    # Явные короткие подписи вроде "$6.49 Shipping"
+    for node in soup.find_all(string=re.compile(r"\$\s*\d", re.I)):
         text = (node.parent.get_text(" ", strip=True) if node.parent else str(node)).strip()
+        if len(text) > 80:
+            continue
         if "ship" not in text.lower():
             continue
         cost, currency, is_free = parse_shipping_info(text)
         if is_free or cost is not None:
             return cost, currency, is_free
 
-    # fallback по всей странице / INITIAL_STATE
+    for node in soup.find_all(string=re.compile(r"ship", re.I)):
+        text = (node.parent.get_text(" ", strip=True) if node.parent else str(node)).strip()
+        if len(text) > 80:
+            continue
+        cost, currency, is_free = parse_shipping_info(text)
+        if is_free or cost is not None:
+            return cost, currency, is_free
+
+    # fallback по HTML без скриптов
+    cleaned = soup.get_text(" ", strip=True)
     for pattern in (
         r"Buyer pays\s*\$?\s*(\d+(?:\.\d+)?)\s*standard shipping",
         r"\$(\d+(?:\.\d+)?)\s*Shipping",
-        r"shipping[^$]{0,40}\$(\d+(?:\.\d+)?)",
     ):
-        match = re.search(pattern, html or "", re.I)
+        match = re.search(pattern, cleaned, re.I)
         if match:
             try:
                 amount = float(match.group(1))
@@ -244,6 +257,6 @@ def _extract_shipping_from_detail(html: str) -> tuple[float | None, str | None, 
                 continue
             return amount, "USD", amount == 0.0
 
-    if re.search(r"free\s+shipping", html or "", re.I):
+    if re.search(r"\bfree shipping\b", cleaned, re.I):
         return 0.0, "USD", True
     return None, None, False
