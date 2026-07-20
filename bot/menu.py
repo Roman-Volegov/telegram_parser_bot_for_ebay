@@ -7,10 +7,8 @@ from aiogram.types import (
     BotCommandScopeDefault,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
     MenuButtonCommands,
     MenuButtonWebApp,
-    ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
     WebAppInfo,
 )
@@ -75,18 +73,10 @@ def open_miniapp_inline_kb(webapp_url: str, *, label: str = "⚙️ Открыт
     )
 
 
-def main_menu_kb(*, is_admin: bool = False, webapp_url: str | None = None) -> ReplyKeyboardMarkup:
-    """Нижнее меню: одна текстовая кнопка «Настройки».
-
-    Важно: НЕ ставим web_app на ReplyKeyboard — у таких Mini App initData пустой
-    (см. docs Telegram WebAppInitData). Открытие идёт через inline-кнопку в ответе бота.
-    """
+def main_menu_kb(*, is_admin: bool = False, webapp_url: str | None = None) -> ReplyKeyboardRemove:
+    """Нижнее reply-меню отключено — Mini App открывается inline / menu button."""
     del is_admin, webapp_url
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=Btn.SETUP)]],
-        resize_keyboard=True,
-        is_persistent=True,
-    )
+    return ReplyKeyboardRemove()
 
 
 def remove_menu_kb() -> ReplyKeyboardRemove:
@@ -97,12 +87,9 @@ def webapp_url_from_base(public_base_url: str) -> str:
     return f"{public_base_url.rstrip('/')}/app/"
 
 
-def menu_kb(*, is_admin: bool, public_base_url: str) -> ReplyKeyboardMarkup:
-    url = webapp_url_from_base(public_base_url)
-    return main_menu_kb(
-        is_admin=is_admin,
-        webapp_url=url if url.startswith("https://") else None,
-    )
+def menu_kb(*, is_admin: bool, public_base_url: str) -> ReplyKeyboardRemove:
+    del is_admin, public_base_url
+    return remove_menu_kb()
 
 
 async def setup_bot_commands(

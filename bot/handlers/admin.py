@@ -8,7 +8,7 @@ from aiogram.types import CallbackQuery, Message
 from bot.config import Settings
 from bot.db import Database
 from bot.keyboards import admin_user_actions_kb, admin_users_filter_kb
-from bot.menu import Btn, menu_kb, open_miniapp_inline_kb, remove_menu_kb, webapp_url_from_base
+from bot.menu import Btn, open_miniapp_inline_kb, remove_menu_kb, webapp_url_from_base
 from bot.models import UserStatus
 
 router = Router(name="admin")
@@ -101,13 +101,12 @@ async def _set_status_and_notify(
         f"Статус {telegram_id}: <b>{status.value}</b>",
         parse_mode="HTML",
     )
-    is_admin = telegram_id in settings.admin_ids
     if status is UserStatus.APPROVED:
         text = (
             "✅ Заявка одобрена.\n"
-            "Нажмите «⚙️ Настройки» внизу или кнопку ниже."
+            "Откройте Mini App кнопкой ниже или через меню у поля ввода."
         )
-        markup = menu_kb(is_admin=is_admin, public_base_url=settings.public_base_url)
+        markup = remove_menu_kb()
     elif status is UserStatus.REJECTED:
         text = "❌ Заявка отклонена."
         markup = remove_menu_kb()

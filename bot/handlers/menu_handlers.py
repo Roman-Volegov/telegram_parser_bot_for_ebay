@@ -5,8 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from bot.config import Settings
-from bot.menu import Btn, menu_kb
-from bot.models import User
+from bot.menu import Btn, open_miniapp_inline_kb, remove_menu_kb, webapp_url_from_base
 
 router = Router(name="menu")
 
@@ -15,12 +14,13 @@ router = Router(name="menu")
 async def show_menu(
     message: Message,
     state: FSMContext,
-    user: User,
     settings: Settings,
 ) -> None:
     await state.clear()
-    is_admin = message.from_user is not None and message.from_user.id in settings.admin_ids
     await message.answer(
-        "Нажмите «⚙️ Настройки» внизу, чтобы открыть Mini App.",
-        reply_markup=menu_kb(is_admin=is_admin, public_base_url=settings.public_base_url),
+        "Откройте Mini App кнопкой ниже или через меню у поля ввода.",
+        reply_markup=remove_menu_kb(),
     )
+    inline = open_miniapp_inline_kb(webapp_url_from_base(settings.public_base_url))
+    if inline is not None:
+        await message.answer("Откройте Mini App:", reply_markup=inline)

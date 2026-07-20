@@ -7,7 +7,7 @@ from aiogram.types import Message
 from bot.config import Settings
 from bot.db import Database
 from bot.keyboards import admin_review_kb
-from bot.menu import menu_kb, open_miniapp_inline_kb, remove_menu_kb, webapp_url_from_base
+from bot.menu import open_miniapp_inline_kb, remove_menu_kb, webapp_url_from_base
 from bot.models import UserStatus
 
 router = Router(name="start")
@@ -32,8 +32,6 @@ async def cmd_start(message: Message, bot: Bot, db: Database, settings: Settings
         assert user is not None
         created = False
 
-    is_admin = message.from_user.id in settings.admin_ids
-
     if user.status is UserStatus.BLOCKED:
         await message.answer("Доступ заблокирован.", reply_markup=remove_menu_kb())
         return
@@ -44,10 +42,9 @@ async def cmd_start(message: Message, bot: Bot, db: Database, settings: Settings
         )
         return
     if user.status is UserStatus.APPROVED:
-        reply_kb = menu_kb(is_admin=is_admin, public_base_url=settings.public_base_url)
         await message.answer(
             "С возвращением!" if user.setup_completed else "Вы одобрены.",
-            reply_markup=reply_kb,
+            reply_markup=remove_menu_kb(),
         )
         inline = open_miniapp_inline_kb(webapp_url_from_base(settings.public_base_url))
         if inline is not None:
