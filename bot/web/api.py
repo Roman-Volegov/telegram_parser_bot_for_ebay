@@ -182,6 +182,25 @@ def create_api_router(
             if marketplace not in EBAY_MARKETPLACES:
                 raise HTTPException(status_code=400, detail="Неизвестный marketplace")
 
+        duplicate = await db.find_identical_search(
+            user.telegram_id,
+            payload.source,
+            payload.keywords,
+            max_price=payload.max_price,
+            min_price=payload.min_price,
+            condition=payload.condition,
+            buy_it_now=buy_it_now,
+            marketplace=marketplace,
+        )
+        if duplicate is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Такой поиск уже есть (#{duplicate.id}). "
+                    "Измените ключевые слова, фильтры или источник."
+                ),
+            )
+
         search = await db.add_search(
             user.telegram_id,
             payload.source,
@@ -195,7 +214,38 @@ def create_api_router(
         if poller is not None:
             # Не пишем в лог опросов — там только снимок последнего цикла poller'а
             await poller.process_search(search, notify=False, record_log=False)
-        return {"id": search.id, "ok": True}
+            try:
+                market_bit = (
+                    f" · {EBAY_MARKETPLACE_LABELS.get(search.marketplace, search.marketplace)}"
+                    if search.marketplace
+                    else ""
+                )
+                price_bits: list[str] = []
+                if search.min_price is not None:
+                    price_bits.append(f"от {search.min_price:g}")
+                if search.max_price is not None:
+                    price_bits.append(f"до {search.max_price:g}")
+                price_bit = f" · {' '.join(price_bits)}" if price_bits else ""
+                await poller.bot.send_message(
+                    user.telegram_id,
+                    (
+                        f"✅ Новый поиск создан #{search.id}\n"
+                        f"{SOURCE_LABELS[search.source]}{market_bit}\n"
+                        f"<code>{search.keywords}</code>{price_bit}\n\n"
+                        "Новые лоты будут приходить в этот чат."
+                    ),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        return {
+            "id": search.id,
+            "ok": True,
+            "message": f"Новый поиск создан #{search.id}",
+            "keywords": search.keywords,
+            "source": search.source.value,
+            "source_label": SOURCE_LABELS[search.source],
+        }
 
     @router.patch("/searches/{search_id}")
     async def api_update_search(

@@ -376,8 +376,13 @@
       payload.buy_it_now = false;
     }
     try {
-      await api("/searches", { method: "POST", body: JSON.stringify(payload) });
-      toast("Поиск создан");
+      const result = await api("/searches", { method: "POST", body: JSON.stringify(payload) });
+      const msg = result.message || "Новый поиск создан";
+      if (tg?.showAlert) {
+        await new Promise((resolve) => tg.showAlert(msg, resolve));
+      } else {
+        toast(msg);
+      }
       event.target.reset();
       document.getElementById("create-bin").checked = true;
       fillCreateMarketplace();
@@ -386,7 +391,11 @@
       switchTab("searches");
       tg?.HapticFeedback?.notificationOccurred("success");
     } catch (err) {
-      toast(err.message);
+      if (tg?.showAlert) {
+        await new Promise((resolve) => tg.showAlert(err.message || "Ошибка", resolve));
+      } else {
+        toast(err.message);
+      }
       tg?.HapticFeedback?.notificationOccurred("error");
     }
   });

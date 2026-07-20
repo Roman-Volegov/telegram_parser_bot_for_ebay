@@ -104,6 +104,70 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(logs[0].found, 5)
         self.assertEqual(logs[0].message, "current")
 
+    async def test_find_identical_search(self):
+        await self.db.upsert_pending_user(5, None, "D")
+        await self.db.set_user_status(5, UserStatus.APPROVED)
+        await self.db.save_setup(
+            5,
+            enabled_sources=[Source.EBAY_PARSER, Source.POSHMARK],
+            setup_completed=True,
+        )
+        created = await self.db.add_search(
+            5,
+            Source.EBAY_PARSER,
+            "Vintage Lamp",
+            min_price=10,
+            max_price=50,
+            buy_it_now=True,
+            marketplace="EBAY_US",
+        )
+        found = await self.db.find_identical_search(
+            5,
+            Source.EBAY_PARSER,
+            "  vintage   lamp ",
+            min_price=10,
+            max_price=50,
+            buy_it_now=True,
+            marketplace="EBAY_US",
+        )
+        self.assertIsNotNone(found)
+        self.assertEqual(found.id, created.id)
+
+        different_price = await self.db.find_identical_search(
+            5,
+            Source.EBAY_PARSER,
+            "vintage lamp",
+            min_price=10,
+            max_price=60,
+            buy_it_now=True,
+            marketplace="EBAY_US",
+        )
+        self.assertIsNone(different_price)
+
+        different_source = await self.db.find_identical_search(
+            5,
+            Source.POSHMARK,
+            "vintage lamp",
+            min_price=10,
+            max_price=50,
+            buy_it_now=False,
+        )
+        self.assertIsNone(different_source)
+
+        await self.db.add_search(
+            5, Source.POSHMARK, "bag", min_price=5, max_price=20, buy_it_now=False
+        )
+        posh_dup = await self.db.find_identical_search(
+            5,
+            Source.POSHMARK,
+            "Bag",
+            min_price=5,
+            max_price=20,
+            buy_it_now=False,
+            marketplace="EBAY_US",  # игнорируется для Poshmark
+        )
+        self.assertIsNotNone(posh_dup)
+
 
 if __name__ == "__main__":
     unittest.main()

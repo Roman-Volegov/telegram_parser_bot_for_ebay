@@ -188,18 +188,44 @@ async def add_confirm(
     poller: PollerService,
 ) -> None:
     data = await state.get_data()
+    source = Source(data["source"])
+    keywords = data["keywords"]
+    max_price = data.get("max_price")
+    min_price = data.get("min_price")
+    condition = data.get("condition")
+    buy_it_now = bool(data.get("buy_it_now", True))
+    marketplace = data.get("marketplace")
+    duplicate = await db.find_identical_search(
+        user.telegram_id,
+        source,
+        keywords,
+        max_price=max_price,
+        min_price=min_price,
+        condition=condition,
+        buy_it_now=buy_it_now,
+        marketplace=marketplace,
+    )
+    if duplicate is not None:
+        await callback.answer("Такой поиск уже есть", show_alert=True)
+        await callback.message.answer(
+            f"⚠️ Полностью идентичный поиск уже существует: #{duplicate.id}.\n"
+            f"{_format_search(duplicate)}"
+        )
+        return
+
     search = await db.add_search(
         user.telegram_id,
-        Source(data["source"]),
-        data["keywords"],
-        max_price=data.get("max_price"),
-        min_price=data.get("min_price"),
-        condition=data.get("condition"),
-        buy_it_now=bool(data.get("buy_it_now", True)),
+        source,
+        keywords,
+        max_price=max_price,
+        min_price=min_price,
+        condition=condition,
+        buy_it_now=buy_it_now,
+        marketplace=marketplace,
     )
     await state.clear()
     await callback.message.edit_text(
-        f"Поиск создан.\n{_format_search(search)}\n\n"
+        f"✅ Новый поиск создан.\n{_format_search(search)}\n\n"
         "Делаю тихий первый прогон (без спама старыми лотами)…",
         parse_mode="HTML",
     )

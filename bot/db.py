@@ -267,6 +267,53 @@ class Database:
 
     # --- searches ---
 
+    @staticmethod
+    def _normalize_keywords(keywords: str) -> str:
+        return " ".join((keywords or "").strip().split()).casefold()
+
+    @staticmethod
+    def _same_optional_float(left: float | None, right: float | None) -> bool:
+        if left is None and right is None:
+            return True
+        if left is None or right is None:
+            return False
+        return float(left) == float(right)
+
+    async def find_identical_search(
+        self,
+        telegram_id: int,
+        source: Source,
+        keywords: str,
+        *,
+        max_price: float | None = None,
+        min_price: float | None = None,
+        condition: str | None = None,
+        buy_it_now: bool = True,
+        marketplace: str | None = None,
+    ) -> Search | None:
+        """Ищет полностью идентичный поиск пользователя."""
+        needle_kw = self._normalize_keywords(keywords)
+        needle_condition = (condition or "").strip() or None
+        needle_market = marketplace if source not in {Source.POSHMARK, Source.ETSY} else None
+        for existing in await self.list_searches(telegram_id):
+            if existing.source is not source:
+                continue
+            if self._normalize_keywords(existing.keywords) != needle_kw:
+                continue
+            if not self._same_optional_float(existing.min_price, min_price):
+                continue
+            if not self._same_optional_float(existing.max_price, max_price):
+                continue
+            existing_condition = (existing.condition or "").strip() or None
+            if existing_condition != needle_condition:
+                continue
+            if bool(existing.buy_it_now) != bool(buy_it_now):
+                continue
+            if existing.marketplace != needle_market:
+                continue
+            return existing
+        return None
+
     async def add_search(
         self,
         telegram_id: int,
