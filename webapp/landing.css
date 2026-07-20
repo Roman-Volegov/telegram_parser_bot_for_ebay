@@ -216,7 +216,7 @@ a:hover {
   transform-origin: center center;
   will-change: transform, opacity;
   filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.45));
-  animation: comet-fly 3.2s linear infinite;
+  animation: comet-fly linear infinite;
 }
 
 .bg__shooting span::before {
@@ -250,29 +250,21 @@ a:hover {
   opacity: 0.9;
 }
 
-/* Разные точки старта по левому краю */
+/* Две кометы, старт с разных точек слева, пауза между появлениями ≥1с */
 .bg__shooting span:nth-child(1) {
-  top: 18%;
-  left: -4%;
-  width: 165px;
+  top: 22%;
+  left: -5%;
+  width: 155px;
+  animation-duration: 7.5s;
   animation-delay: 0s;
-  animation-duration: 2.8s;
 }
 
 .bg__shooting span:nth-child(2) {
-  top: 48%;
-  left: -6%;
-  width: 130px;
-  animation-delay: -1.1s;
-  animation-duration: 3.4s;
-}
-
-.bg__shooting span:nth-child(3) {
-  top: 78%;
-  left: -3%;
-  width: 185px;
-  animation-delay: -2.2s;
-  animation-duration: 3.0s;
+  top: 68%;
+  left: -4%;
+  width: 175px;
+  animation-duration: 9.5s;
+  animation-delay: -4s;
 }
 
 .bg__grain {
