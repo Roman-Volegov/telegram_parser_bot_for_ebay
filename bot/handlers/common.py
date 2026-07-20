@@ -12,16 +12,11 @@ from bot.models import User
 router = Router(name="common")
 
 HELP_TEXT = """
-<b>Меню пользователя</b>
-📱 Mini App — поиски и <b>все настройки</b> (источники, ключи eBay, marketplace)
-➕ Новый поиск / 📋 Мои поиски — также в чате
-⚙️ / 🔑 — открывают Mini App → Настройки
-❓ Справка / 🏠 Меню
+<b>DecoParser</b>
+Нажмите <b>⚙️ Настройки</b> внизу — откроется Mini App:
+поиски, источники, ключи eBay и лог опросов.
 
-Команды: /app /add /list /setup …
-
-<b>Админ</b>
-👥 Пользователи — заявки и статусы
+Команды: /app /add /list /setup /help
 """.strip()
 
 

@@ -47,12 +47,12 @@ async def cmd_start(message: Message, bot: Bot, db: Database, settings: Settings
         kb = menu_kb(is_admin=is_admin, public_base_url=settings.public_base_url)
         if user.setup_completed:
             await message.answer(
-                "С возвращением! Пользуйтесь кнопками меню или Mini App.",
+                "С возвращением! Нажмите «⚙️ Настройки», чтобы открыть Mini App.",
                 reply_markup=kb,
             )
         else:
             await message.answer(
-                "Вы одобрены. Откройте Mini App → вкладка «Настройки».",
+                "Вы одобрены. Нажмите «⚙️ Настройки» и завершите настройку в Mini App.",
                 reply_markup=kb,
             )
         return

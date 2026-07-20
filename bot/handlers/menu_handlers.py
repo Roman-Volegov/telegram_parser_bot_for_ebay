@@ -21,7 +21,6 @@ async def show_menu(
     await state.clear()
     is_admin = message.from_user is not None and message.from_user.id in settings.admin_ids
     await message.answer(
-        "Главное меню. Выберите действие кнопкой ниже,\n"
-        "откройте Mini App или меню команд слева.",
+        "Нажмите «⚙️ Настройки» внизу, чтобы открыть Mini App.",
         reply_markup=menu_kb(is_admin=is_admin, public_base_url=settings.public_base_url),
     )

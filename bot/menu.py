@@ -17,9 +17,10 @@ from aiogram.types import (
 class Btn:
     """Подписи кнопок reply-меню."""
 
+    SETUP = "⚙️ Настройки"
+    # Сохранены для slash-команд / старых хендлеров
     ADD = "➕ Новый поиск"
     LIST = "📋 Мои поиски"
-    SETUP = "⚙️ Настройки"
     KEYS = "🔑 Ключи API"
     REVOKE_KEYS = "🗑 Отозвать ключи"
     HELP = "❓ Справка"
@@ -29,11 +30,11 @@ class Btn:
 
 
 USER_COMMANDS = [
-    BotCommand(command="start", description="Старт / обновление меню"),
+    BotCommand(command="start", description="Старт / обновить кнопку настроек"),
     BotCommand(command="app", description="Открыть Mini App"),
     BotCommand(command="add", description="Новый поиск"),
     BotCommand(command="list", description="Мои поиски"),
-    BotCommand(command="setup", description="Настройки источников"),
+    BotCommand(command="setup", description="Настройки"),
     BotCommand(command="settings", description="Настройки (алиас)"),
     BotCommand(command="keys_status", description="Статус ключей eBay"),
     BotCommand(command="revoke_keys", description="Удалить ключи eBay"),
@@ -48,27 +49,24 @@ ADMIN_EXTRA_COMMANDS = [
 ]
 
 
+def settings_webapp_url(webapp_url: str) -> str:
+    base = webapp_url.split("#", 1)[0]
+    return f"{base}#settings"
+
+
 def main_menu_kb(*, is_admin: bool = False, webapp_url: str | None = None) -> ReplyKeyboardMarkup:
+    """Нижнее меню: только кнопка «Настройки» → Mini App."""
+    del is_admin  # больше не влияет на reply-клавиатуру
     rows: list[list[KeyboardButton]] = []
-    if webapp_url:
+    if webapp_url and webapp_url.startswith("https://"):
         rows.append(
             [
                 KeyboardButton(
-                    text=Btn.APP,
-                    web_app=WebAppInfo(url=webapp_url),
+                    text=Btn.SETUP,
+                    web_app=WebAppInfo(url=settings_webapp_url(webapp_url)),
                 )
             ]
         )
-    rows.extend(
-        [
-            [KeyboardButton(text=Btn.ADD), KeyboardButton(text=Btn.LIST)],
-            [KeyboardButton(text=Btn.SETUP), KeyboardButton(text=Btn.KEYS)],
-            [KeyboardButton(text=Btn.HELP)],
-        ]
-    )
-    if is_admin:
-        rows.append([KeyboardButton(text=Btn.ADMIN_USERS)])
-    rows.append([KeyboardButton(text=Btn.MENU)])
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
@@ -112,8 +110,8 @@ async def setup_bot_commands(
     if webapp_url and webapp_url.startswith("https://"):
         await bot.set_chat_menu_button(
             menu_button=MenuButtonWebApp(
-                text="Mini App",
-                web_app=WebAppInfo(url=webapp_url),
+                text="Настройки",
+                web_app=WebAppInfo(url=settings_webapp_url(webapp_url)),
             )
         )
     else:
