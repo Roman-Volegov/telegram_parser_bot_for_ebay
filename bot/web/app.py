@@ -44,6 +44,19 @@ def create_app(
     if WEBAPP_DIR.exists():
         app.mount("/app/static", StaticFiles(directory=WEBAPP_DIR), name="webapp-static")
 
+        @app.get("/")
+        async def landing_index():
+            return FileResponse(WEBAPP_DIR / "landing.html")
+
+        @app.get("/landing.css")
+        async def landing_css():
+            return FileResponse(WEBAPP_DIR / "landing.css", media_type="text/css")
+
+        @app.get("/about")
+        @app.get("/about/")
+        async def about_page():
+            return FileResponse(WEBAPP_DIR / "landing.html")
+
         @app.get("/app")
         @app.get("/app/")
         async def miniapp_index():

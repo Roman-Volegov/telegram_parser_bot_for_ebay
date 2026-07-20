@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta
+    name="description"
+    content="DecoParser watches eBay, Poshmark, and Etsy for you and sends new listings to Telegram the moment they appear."
+  />
+  <title>DecoParser — Marketplace alerts in Telegram</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Figtree:wght@400;500;600&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="/landing.css" />
+</head>
+<body>
+  <header class="hero">
+    <div class="hero__media" aria-hidden="true">
+      <img
+        src="https://images.unsplash.com/photo-1513519245088-0e12902e35ca?auto=format&fit=crop&w=2000&q=80"
+        alt=""
+        width="2000"
+        height="1333"
+      />
+    </div>
+    <div class="hero__veil"></div>
+    <div class="hero__content">
+      <p class="brand reveal">DecoParser</p>
+      <h1 class="reveal reveal--delay-1">New marketplace finds, delivered to Telegram</h1>
+      <p class="lede reveal reveal--delay-2">
+        Set saved searches on eBay, Poshmark, and Etsy — DecoParser checks them for you and pings you when something fresh shows up.
+      </p>
+      <div class="cta-row reveal reveal--delay-3">
+        <a class="cta" href="https://t.me/DecoParser_bot">Open in Telegram</a>
+        <a class="cta cta--ghost" href="#how">How it works</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section id="how" class="section">
+      <h2>How it works</h2>
+      <p class="section__lede">Three steps from request to live alerts.</p>
+      <ol class="steps">
+        <li>
+          <span class="steps__n">01</span>
+          <h3>Request access</h3>
+          <p>Message <a href="https://t.me/DecoParser_bot">@DecoParser_bot</a> and wait for approval.</p>
+        </li>
+        <li>
+          <span class="steps__n">02</span>
+          <h3>Pick your sources</h3>
+          <p>Enable eBay, Poshmark, and/or Etsy, then create keyword searches with price filters.</p>
+        </li>
+        <li>
+          <span class="steps__n">03</span>
+          <h3>Get the finds</h3>
+          <p>When a new listing matches, you get a photo card with price, shipping, and a direct link.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section section--sources">
+      <h2>Marketplaces we watch</h2>
+      <p class="section__lede">One bot for the places collectors and resellers already check by hand.</p>
+      <ul class="sources">
+        <li>
+          <strong>eBay</strong>
+          <span>Official API or HTML parser, region-aware searches, Buy It Now filters</span>
+        </li>
+        <li>
+          <strong>Poshmark</strong>
+          <span>Fresh listings with price and shipping pulled from the public catalog</span>
+        </li>
+        <li>
+          <strong>Etsy</strong>
+          <span>Handmade and vintage finds via Open API when configured</span>
+        </li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h2>Built for quiet monitoring</h2>
+      <p class="section__lede">
+        Manage searches in the Telegram Mini App, pause noisy queries, and keep credentials encrypted when you use eBay API keys.
+      </p>
+      <ul class="bullets">
+        <li>Periodic polling with a silent first run so old listings do not flood the chat</li>
+        <li>Duplicate search protection so you do not create the same query twice</li>
+        <li>Per-user setup, approval flow, and admin controls</li>
+      </ul>
+      <p class="close-cta">
+        <a class="cta" href="https://t.me/DecoParser_bot">Start with @DecoParser_bot</a>
+      </p>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p><strong>DecoParser</strong> — marketplace alerts for Telegram</p>
+    <p><a href="https://t.me/DecoParser_bot">t.me/DecoParser_bot</a></p>
+  </footer>
+</body>
+</html>

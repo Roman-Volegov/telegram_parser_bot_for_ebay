@@ -56,6 +56,7 @@ sudo docker compose up -d --build
 
 - HTTP health: `18080`
 - HTTPS Mini App (Caddy): `8443` → `/app/`
+- Public landing page (English): `https://<IP>.sslip.io:8443/`
 - Контейнеры: `ebay-poshmark-bot`, `ebay-poshmark-caddy`
 
 ### Mini App
