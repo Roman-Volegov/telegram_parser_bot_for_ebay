@@ -3,18 +3,20 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
+from aiogram.types import Message
 
 from bot.config import Settings
-from bot.menu import Btn, menu_kb, webapp_url_from_base
+from bot.menu import Btn, menu_kb, open_miniapp_inline_kb, webapp_url_from_base
 from bot.models import User
 
 router = Router(name="common")
 
 HELP_TEXT = """
 <b>DecoParser</b>
-Нажмите <b>⚙️ Настройки</b> внизу — откроется Mini App:
-поиски, источники, ключи eBay и лог опросов.
+Нажмите <b>⚙️ Настройки</b> внизу — бот пришлёт кнопку открытия Mini App
+(поиски, источники, ключи eBay, лог опросов).
+
+Также можно открыть через кнопку меню рядом с полем ввода.
 
 Команды: /app /add /list /setup /help
 """.strip()
@@ -40,17 +42,11 @@ async def cmd_help(
 @router.message(Command("app"))
 async def cmd_app(message: Message, settings: Settings) -> None:
     url = webapp_url_from_base(settings.public_base_url)
-    if not url.startswith("https://"):
+    inline = open_miniapp_inline_kb(url, label="📱 Открыть Mini App")
+    if inline is None:
         await message.answer(
             "Mini App требует HTTPS.\n"
             f"Сейчас PUBLIC_BASE_URL={settings.public_base_url}"
         )
         return
-    await message.answer(
-        "Откройте Mini App:",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="📱 Открыть Mini App", web_app=WebAppInfo(url=url))]
-            ]
-        ),
-    )
+    await message.answer("Откройте Mini App:", reply_markup=inline)

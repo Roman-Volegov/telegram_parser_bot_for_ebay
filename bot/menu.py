@@ -5,6 +5,8 @@ from aiogram.types import (
     BotCommand,
     BotCommandScopeChat,
     BotCommandScopeDefault,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     KeyboardButton,
     MenuButtonCommands,
     MenuButtonWebApp,
@@ -50,28 +52,38 @@ ADMIN_EXTRA_COMMANDS = [
 
 
 def settings_webapp_url(webapp_url: str) -> str:
-    """URL Mini App. Без #fragment — иначе часть клиентов Telegram не передаёт initData."""
+    """URL Mini App со вкладкой настроек (query, без #fragment)."""
     base = webapp_url.split("#", 1)[0].split("?", 1)[0]
     if not base.endswith("/"):
         base = f"{base}/"
     return f"{base}?tab=settings"
 
 
-def main_menu_kb(*, is_admin: bool = False, webapp_url: str | None = None) -> ReplyKeyboardMarkup:
-    """Нижнее меню: только кнопка «Настройки» → Mini App."""
-    del is_admin  # больше не влияет на reply-клавиатуру
-    rows: list[list[KeyboardButton]] = []
-    if webapp_url and webapp_url.startswith("https://"):
-        rows.append(
+def open_miniapp_inline_kb(webapp_url: str, *, label: str = "⚙️ Открыть Mini App") -> InlineKeyboardMarkup | None:
+    """Inline WebApp-кнопка — только так Telegram передаёт initData."""
+    if not webapp_url.startswith("https://"):
+        return None
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
             [
-                KeyboardButton(
-                    text=Btn.SETUP,
+                InlineKeyboardButton(
+                    text=label,
                     web_app=WebAppInfo(url=settings_webapp_url(webapp_url)),
                 )
             ]
-        )
+        ]
+    )
+
+
+def main_menu_kb(*, is_admin: bool = False, webapp_url: str | None = None) -> ReplyKeyboardMarkup:
+    """Нижнее меню: одна текстовая кнопка «Настройки».
+
+    Важно: НЕ ставим web_app на ReplyKeyboard — у таких Mini App initData пустой
+    (см. docs Telegram WebAppInitData). Открытие идёт через inline-кнопку в ответе бота.
+    """
+    del is_admin, webapp_url
     return ReplyKeyboardMarkup(
-        keyboard=rows,
+        keyboard=[[KeyboardButton(text=Btn.SETUP)]],
         resize_keyboard=True,
         is_persistent=True,
     )

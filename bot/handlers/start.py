@@ -7,7 +7,7 @@ from aiogram.types import Message
 from bot.config import Settings
 from bot.db import Database
 from bot.keyboards import admin_review_kb
-from bot.menu import menu_kb, remove_menu_kb
+from bot.menu import menu_kb, open_miniapp_inline_kb, remove_menu_kb, webapp_url_from_base
 from bot.models import UserStatus
 
 router = Router(name="start")
@@ -44,16 +44,18 @@ async def cmd_start(message: Message, bot: Bot, db: Database, settings: Settings
         )
         return
     if user.status is UserStatus.APPROVED:
-        kb = menu_kb(is_admin=is_admin, public_base_url=settings.public_base_url)
-        if user.setup_completed:
+        reply_kb = menu_kb(is_admin=is_admin, public_base_url=settings.public_base_url)
+        await message.answer(
+            "С возвращением!" if user.setup_completed else "Вы одобрены.",
+            reply_markup=reply_kb,
+        )
+        inline = open_miniapp_inline_kb(webapp_url_from_base(settings.public_base_url))
+        if inline is not None:
             await message.answer(
-                "С возвращением! Нажмите «⚙️ Настройки», чтобы открыть Mini App.",
-                reply_markup=kb,
-            )
-        else:
-            await message.answer(
-                "Вы одобрены. Нажмите «⚙️ Настройки» и завершите настройку в Mini App.",
-                reply_markup=kb,
+                "Откройте Mini App:"
+                if user.setup_completed
+                else "Завершите настройку в Mini App:",
+                reply_markup=inline,
             )
         return
 

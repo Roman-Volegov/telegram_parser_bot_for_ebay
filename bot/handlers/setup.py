@@ -3,29 +3,18 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
+from aiogram.types import Message
 
 from bot.config import Settings
-from bot.menu import Btn, menu_kb, settings_webapp_url, webapp_url_from_base
+from bot.menu import (
+    Btn,
+    menu_kb,
+    open_miniapp_inline_kb,
+    webapp_url_from_base,
+)
 from bot.models import User
 
 router = Router(name="setup")
-
-
-def _open_settings_kb(settings: Settings) -> InlineKeyboardMarkup | None:
-    url = webapp_url_from_base(settings.public_base_url)
-    if not url.startswith("https://"):
-        return None
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="⚙️ Открыть настройки",
-                    web_app=WebAppInfo(url=settings_webapp_url(url)),
-                )
-            ]
-        ]
-    )
 
 
 async def _redirect_to_miniapp(
@@ -35,13 +24,15 @@ async def _redirect_to_miniapp(
     text: str,
 ) -> None:
     is_admin = message.from_user is not None and message.from_user.id in settings.admin_ids
-    kb = _open_settings_kb(settings)
+    url = webapp_url_from_base(settings.public_base_url)
+    inline = open_miniapp_inline_kb(url)
+    # Reply-клавиатура остаётся; открытие Mini App — только через inline (есть initData)
     await message.answer(
         text,
-        reply_markup=kb
+        reply_markup=inline
         or menu_kb(is_admin=is_admin, public_base_url=settings.public_base_url),
     )
-    if kb is None:
+    if inline is None:
         await message.answer(
             "Mini App требует HTTPS. Сейчас настройки недоступны через WebApp.\n"
             f"PUBLIC_BASE_URL={settings.public_base_url}"
@@ -61,13 +52,7 @@ async def cmd_setup(
     await _redirect_to_miniapp(
         message,
         settings,
-        text=(
-            "Все настройки перенесены в Mini App:\n"
-            "• источники eBay API / Parser / Poshmark\n"
-            "• Client ID / Secret + проверка OAuth\n"
-            "• marketplace и deletion URL\n\n"
-            "Нажмите кнопку ниже."
-        ),
+        text="Нажмите кнопку ниже, чтобы открыть Mini App.",
     )
 
 
@@ -83,7 +68,7 @@ async def cmd_keys_status(
     await _redirect_to_miniapp(
         message,
         settings,
-        text="Статус ключей и отзыв — во вкладке «Настройки» Mini App.",
+        text="Статус ключей и отзыв — в Mini App → Настройки.",
     )
 
 
