@@ -31,6 +31,9 @@
     logsList: document.getElementById("logs-list"),
     logsEmpty: document.getElementById("logs-empty"),
     createSource: document.getElementById("create-source"),
+    createMarketplace: document.getElementById("create-marketplace"),
+    createMarketplaceWrap: document.getElementById("create-marketplace-wrap"),
+    createBinWrap: document.getElementById("create-bin-wrap"),
     sourcesBox: document.getElementById("sources-box"),
     marketplace: document.getElementById("ebay-marketplace"),
     keysStatus: document.getElementById("keys-status"),
@@ -106,9 +109,31 @@
     els.ebayApiBlock.classList.toggle("hidden", !show);
   }
 
+  function syncCreateSourceFields() {
+    const source = els.createSource.value;
+    const isPosh = source === "poshmark";
+    els.createBinWrap.classList.toggle("hidden", isPosh);
+    els.createMarketplaceWrap.classList.toggle("hidden", isPosh);
+  }
+
+  function fillCreateMarketplace() {
+    const labels = state.me.ebay_marketplace_labels || {};
+    const markets = state.me.ebay_marketplaces || ["EBAY_US"];
+    const current = state.me.ebay_marketplace || "EBAY_US";
+    els.createMarketplace.innerHTML = "";
+    markets.forEach((market) => {
+      const opt = document.createElement("option");
+      opt.value = market;
+      opt.textContent = labels[market] || market;
+      if (market === current) opt.selected = true;
+      els.createMarketplace.appendChild(opt);
+    });
+  }
+
   function fillSettings() {
     const labels = state.me.source_labels || {};
     const enabled = new Set(state.me.enabled_sources || []);
+    const marketLabels = state.me.ebay_marketplace_labels || {};
 
     els.createSource.innerHTML = "";
     enabled.forEach((source) => {
@@ -117,6 +142,9 @@
       opt.textContent = labels[source] || source;
       els.createSource.appendChild(opt);
     });
+    els.createSource.onchange = syncCreateSourceFields;
+    fillCreateMarketplace();
+    syncCreateSourceFields();
 
     els.sourcesBox.innerHTML = "";
     Object.entries(labels).forEach(([value, label]) => {
@@ -136,7 +164,7 @@
     (state.me.ebay_marketplaces || ["EBAY_US"]).forEach((market) => {
       const opt = document.createElement("option");
       opt.value = market;
-      opt.textContent = market;
+      opt.textContent = marketLabels[market] || market;
       if (market === (state.me.ebay_marketplace || "EBAY_US")) opt.selected = true;
       els.marketplace.appendChild(opt);
     });
@@ -175,11 +203,15 @@
       const priceBits = [];
       if (item.min_price != null) priceBits.push(`от ${item.min_price}`);
       if (item.max_price != null) priceBits.push(`до ${item.max_price}`);
+      const region = item.marketplace_label
+        ? `<span class="badge">${escapeHtml(item.marketplace_label)}</span>`
+        : "";
       card.innerHTML = `
         <h3>${escapeHtml(item.keywords)}</h3>
         <p class="meta">
           <span class="badge ${item.paused ? "pause" : ""}">${item.paused ? "пауза" : "активен"}</span>
           <span class="badge">${escapeHtml(item.source_label)}</span>
+          ${region}
           ${priceBits.length ? escapeHtml(priceBits.join(" · ")) : "без фильтра цены"}
         </p>
         <div class="actions">
@@ -338,11 +370,18 @@
       max_price: numOrNull(document.getElementById("create-max").value),
       buy_it_now: document.getElementById("create-bin").checked,
     };
+    if (payload.source !== "poshmark") {
+      payload.marketplace = els.createMarketplace.value;
+    } else {
+      payload.buy_it_now = false;
+    }
     try {
       await api("/searches", { method: "POST", body: JSON.stringify(payload) });
       toast("Поиск создан");
       event.target.reset();
       document.getElementById("create-bin").checked = true;
+      fillCreateMarketplace();
+      syncCreateSourceFields();
       await loadAll();
       switchTab("searches");
       tg?.HapticFeedback?.notificationOccurred("success");

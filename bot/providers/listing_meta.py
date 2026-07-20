@@ -31,13 +31,21 @@ def parse_shipping_info(
     if not raw:
         return None, None, False
     lower = raw.lower()
-    if "free shipping" in lower or "бесплатн" in lower or lower in {"free", "бесплатно"}:
+    if (
+        "free shipping" in lower
+        or "бесплатн" in lower
+        or lower in {"free", "бесплатно"}
+        or re.search(r"\bfree\b.*\bship", lower)
+    ):
         return 0.0, None, True
     if "shipping not specified" in lower or "не указан" in lower:
         return None, None, False
-    # "+$12.50 shipping", "Shipping: $5.99"
+    # "+$12.50 shipping", "Shipping: $5.99", "$6.49 Shipping"
     price, currency = parse_price_text(raw)
     if price is None:
+        return None, None, False
+    # Если в строке нет намёка на доставку — не считаем это shipping
+    if not any(token in lower for token in ("ship", "delivery", "postage", "достав")):
         return None, None, False
     return price, currency, price == 0.0
 

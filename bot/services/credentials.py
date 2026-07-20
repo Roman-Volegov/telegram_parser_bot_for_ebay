@@ -34,6 +34,7 @@ class CredentialsService:
         user: User,
         *,
         proxy: str | None = None,
+        marketplace_id: str | None = None,
     ) -> EbayApiProvider:
         keys = await self.get_ebay_keys(user.telegram_id)
         if keys is None:
@@ -42,7 +43,7 @@ class CredentialsService:
         return EbayApiProvider(
             client_id=client_id,
             client_secret=client_secret,
-            marketplace_id=user.ebay_marketplace,
+            marketplace_id=marketplace_id or user.ebay_marketplace,
             telegram_id=user.telegram_id,
             proxy=proxy,
         )

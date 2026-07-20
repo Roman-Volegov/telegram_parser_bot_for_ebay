@@ -22,6 +22,17 @@ class ListingMetaTests(unittest.TestCase):
         self.assertEqual(cost, 12.5)
         self.assertEqual(currency, "USD")
 
+    def test_shipping_poshmark_format(self):
+        cost, currency, is_free = parse_shipping_info("$6.49 Shipping")
+        self.assertFalse(is_free)
+        self.assertEqual(cost, 6.49)
+        self.assertEqual(currency, "USD")
+
+    def test_shipping_ignores_plain_price(self):
+        cost, currency, is_free = parse_shipping_info("$58")
+        self.assertIsNone(cost)
+        self.assertFalse(is_free)
+
     def test_listing_type_html(self):
         self.assertEqual(
             parse_ebay_html_listing_type("Buy It Now or Best Offer"),

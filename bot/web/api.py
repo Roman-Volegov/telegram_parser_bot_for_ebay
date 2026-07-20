@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from bot.db import Database
-from bot.models import EBAY_MARKETPLACES, SOURCE_LABELS, Source, User, UserStatus
+from bot.models import EBAY_MARKETPLACE_LABELS, EBAY_MARKETPLACES, SOURCE_LABELS, Source, User, UserStatus
 from bot.providers.ebay_api import EbayApiProvider
 from bot.services.credentials import CredentialsService
 from bot.services.poller import PollerService
@@ -20,6 +20,7 @@ class SearchCreateIn(BaseModel):
     max_price: float | None = None
     condition: str | None = None
     buy_it_now: bool = True
+    marketplace: str | None = None
 
 
 class SearchUpdateIn(BaseModel):
@@ -88,6 +89,7 @@ def create_api_router(
             "source_labels": {s.value: SOURCE_LABELS[s] for s in Source},
             "ebay_marketplace": user.ebay_marketplace,
             "ebay_marketplaces": list(EBAY_MARKETPLACES),
+            "ebay_marketplace_labels": dict(EBAY_MARKETPLACE_LABELS),
             "has_ebay_keys": has_keys,
             "deletion_url": deletion_url,
             "deletion_token": deletion_token,
@@ -119,6 +121,12 @@ def create_api_router(
                     "condition": s.condition,
                     "buy_it_now": s.buy_it_now,
                     "paused": s.paused,
+                    "marketplace": s.marketplace,
+                    "marketplace_label": (
+                        EBAY_MARKETPLACE_LABELS.get(s.marketplace, s.marketplace)
+                        if s.marketplace
+                        else None
+                    ),
                 }
                 for s in searches
             ]
@@ -155,6 +163,17 @@ def create_api_router(
             raise HTTPException(status_code=400, detail="Сначала завершите настройки")
         if payload.source not in user.enabled_sources:
             raise HTTPException(status_code=400, detail="Источник не включён в настройках")
+
+        marketplace: str | None = None
+        buy_it_now = payload.buy_it_now
+        if payload.source is Source.POSHMARK:
+            buy_it_now = False
+            marketplace = None
+        else:
+            marketplace = payload.marketplace or user.ebay_marketplace or "EBAY_US"
+            if marketplace not in EBAY_MARKETPLACES:
+                raise HTTPException(status_code=400, detail="Неизвестный marketplace")
+
         search = await db.add_search(
             user.telegram_id,
             payload.source,
@@ -162,7 +181,8 @@ def create_api_router(
             max_price=payload.max_price,
             min_price=payload.min_price,
             condition=payload.condition,
-            buy_it_now=payload.buy_it_now,
+            buy_it_now=buy_it_now,
+            marketplace=marketplace,
         )
         if poller is not None:
             # Не пишем в лог опросов — там только снимок последнего цикла poller'а

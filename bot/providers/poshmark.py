@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from urllib.parse import quote_plus
@@ -91,7 +92,48 @@ class PoshmarkProvider(BaseProvider):
 
         if not listings:
             logger.warning("Poshmark returned 0 items for %r", query)
-        return listings[:limit]
+            return []
+
+        # В выдаче поиска доставки нет — подтягиваем со страницы лота
+        sem = asyncio.Semaphore(5)
+
+        async def enrich(item: Listing) -> Listing:
+            async with sem:
+                return await self._enrich_shipping(item)
+
+        enriched = await asyncio.gather(*[enrich(item) for item in listings[:limit]])
+        return list(enriched)
+
+    async def _enrich_shipping(self, listing: Listing) -> Listing:
+        if listing.shipping_free or listing.shipping_cost is not None:
+            return listing
+        try:
+            response = await self._client.get(
+                listing.item_url,
+                headers={"Referer": "https://poshmark.com/"},
+            )
+            if response.status_code >= 400:
+                return listing
+            cost, currency, is_free = _extract_shipping_from_detail(response.text)
+            if not is_free and cost is None:
+                return listing
+            return Listing(
+                id=listing.id,
+                title=listing.title,
+                description=listing.description,
+                price=listing.price,
+                currency=listing.currency,
+                image_url=listing.image_url,
+                item_url=listing.item_url,
+                source=listing.source,
+                shipping_cost=cost,
+                shipping_currency=currency or listing.shipping_currency or listing.currency,
+                shipping_free=is_free,
+                listing_type=listing.listing_type,
+            )
+        except Exception as exc:
+            logger.debug("Poshmark shipping enrich failed for %s: %s", listing.id, exc)
+            return listing
 
 
 def _extract_poshmark_id(href: str) -> str | None:
@@ -124,6 +166,25 @@ def _extract_title(anchor) -> str | None:
 
 
 def _extract_price_near(anchor) -> tuple[float | None, str | None]:
+    # Предпочитаем текущую цену в карточке, а не весь текст (там бывает original)
+    for sel in (
+        ".tile-grid-redesign__price-current",
+        ".tile__price",
+        "[class*='price-current']",
+    ):
+        el = None
+        node = anchor
+        for _ in range(5):
+            if node is None:
+                break
+            el = node.select_one(sel)
+            if el:
+                break
+            node = node.parent
+        if el:
+            price, currency = parse_price_text(el.get_text(" ", strip=True))
+            if price is not None:
+                return price, currency
     container = anchor
     for _ in range(4):
         if container is None:
@@ -155,4 +216,34 @@ def _extract_shipping_near(anchor) -> tuple[float | None, str | None, bool]:
             if is_free or cost is not None:
                 return cost, currency, is_free
         container = container.parent
+    return None, None, False
+
+
+def _extract_shipping_from_detail(html: str) -> tuple[float | None, str | None, bool]:
+    soup = BeautifulSoup(html or "", "lxml")
+    # Видимый текст вида "$6.49 Shipping"
+    for node in soup.find_all(string=re.compile(r"ship", re.I)):
+        text = (node.parent.get_text(" ", strip=True) if node.parent else str(node)).strip()
+        if "ship" not in text.lower():
+            continue
+        cost, currency, is_free = parse_shipping_info(text)
+        if is_free or cost is not None:
+            return cost, currency, is_free
+
+    # fallback по всей странице / INITIAL_STATE
+    for pattern in (
+        r"Buyer pays\s*\$?\s*(\d+(?:\.\d+)?)\s*standard shipping",
+        r"\$(\d+(?:\.\d+)?)\s*Shipping",
+        r"shipping[^$]{0,40}\$(\d+(?:\.\d+)?)",
+    ):
+        match = re.search(pattern, html or "", re.I)
+        if match:
+            try:
+                amount = float(match.group(1))
+            except (TypeError, ValueError):
+                continue
+            return amount, "USD", amount == 0.0
+
+    if re.search(r"free\s+shipping", html or "", re.I):
+        return 0.0, "USD", True
     return None, None, False

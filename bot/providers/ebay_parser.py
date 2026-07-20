@@ -7,7 +7,7 @@ from urllib.parse import urlencode
 import feedparser
 from bs4 import BeautifulSoup, Tag
 
-from bot.models import Listing, Search, Source
+from bot.models import EBAY_MARKETPLACE_HOSTS, Listing, Search, Source
 from bot.providers.base import BaseProvider, ProviderError
 from bot.providers.http_utils import (
     build_client,
@@ -30,30 +30,9 @@ class EbayParserProvider(BaseProvider):
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def search(self, search: Search, *, limit: int = 20) -> list[Listing]:
-        try:
-            await self._warmup()
-            # eBay часто отдаёт HTML вместо RSS на _rss=1 — сначала HTML.
-            listings = await self._search_html(search, limit=limit)
-            if listings:
-                return listings
-            logger.info("eBay HTML empty for %r, trying RSS", search.keywords)
-            return await self._search_rss(search, limit=limit)
-        except Exception as exc:
-            raise ProviderError(f"eBay parser failed: {exc}") from exc
-
-    async def _warmup(self) -> None:
-        if self._warmed:
-            return
-        try:
-            response = await self._client.get(
-                "https://www.ebay.com/",
-                headers={"Referer": "https://www.google.com/"},
-            )
-            if response.status_code < 400:
-                self._warmed = True
-        except Exception as exc:
-            logger.debug("eBay warmup failed: %s", exc)
+    def _host_for(self, search: Search) -> str:
+        market = search.marketplace or "EBAY_US"
+        return EBAY_MARKETPLACE_HOSTS.get(market, "www.ebay.com")
 
     def _build_params(self, search: Search) -> dict[str, str]:
         params: dict[str, str] = {
@@ -71,10 +50,36 @@ class EbayParserProvider(BaseProvider):
             params["LH_ItemCondition"] = search.condition
         return params
 
-    async def _search_rss(self, search: Search, *, limit: int) -> list[Listing]:
+    async def _warmup(self, host: str = "www.ebay.com") -> None:
+        if self._warmed:
+            return
+        try:
+            response = await self._client.get(
+                f"https://{host}/",
+                headers={"Referer": "https://www.google.com/"},
+            )
+            if response.status_code < 400:
+                self._warmed = True
+        except Exception as exc:
+            logger.debug("eBay warmup failed: %s", exc)
+
+    async def search(self, search: Search, *, limit: int = 20) -> list[Listing]:
+        try:
+            host = self._host_for(search)
+            await self._warmup(host)
+            # eBay часто отдаёт HTML вместо RSS на _rss=1 — сначала HTML.
+            listings = await self._search_html(search, host=host, limit=limit)
+            if listings:
+                return listings
+            logger.info("eBay HTML empty for %r, trying RSS", search.keywords)
+            return await self._search_rss(search, host=host, limit=limit)
+        except Exception as exc:
+            raise ProviderError(f"eBay parser failed: {exc}") from exc
+
+    async def _search_rss(self, search: Search, *, host: str, limit: int) -> list[Listing]:
         params = self._build_params(search)
         params["_rss"] = "1"
-        url = f"https://www.ebay.com/sch/i.html?{urlencode(params)}"
+        url = f"https://{host}/sch/i.html?{urlencode(params)}"
         response = await request_with_retries(
             self._client,
             "GET",
@@ -83,7 +88,7 @@ class EbayParserProvider(BaseProvider):
             max_delay=2.5,
             headers={
                 "Accept": "application/rss+xml, application/xml, text/xml, */*;q=0.8",
-                "Referer": "https://www.ebay.com/",
+                "Referer": f"https://{host}/",
                 "Sec-Fetch-Site": "same-origin",
             },
         )
@@ -125,10 +130,10 @@ class EbayParserProvider(BaseProvider):
             )
         return listings
 
-    async def _search_html(self, search: Search, *, limit: int) -> list[Listing]:
+    async def _search_html(self, search: Search, *, host: str, limit: int) -> list[Listing]:
         params = self._build_params(search)
         params["_ipg"] = str(min(max(limit, 20), 60))
-        url = f"https://www.ebay.com/sch/i.html?{urlencode(params)}"
+        url = f"https://{host}/sch/i.html?{urlencode(params)}"
         response = await request_with_retries(
             self._client,
             "GET",
@@ -136,7 +141,7 @@ class EbayParserProvider(BaseProvider):
             min_delay=1.0,
             max_delay=2.5,
             headers={
-                "Referer": "https://www.ebay.com/",
+                "Referer": f"https://{host}/",
                 "Sec-Fetch-Site": "same-origin",
             },
         )

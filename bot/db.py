@@ -278,8 +278,14 @@ class Database:
         condition: str | None = None,
         buy_it_now: bool = True,
         filters_json: dict[str, Any] | None = None,
+        marketplace: str | None = None,
     ) -> Search:
         now = _utcnow()
+        filters = dict(filters_json or {})
+        if marketplace:
+            filters["marketplace"] = marketplace
+        elif source is Source.POSHMARK:
+            filters.pop("marketplace", None)
         cursor = await self.conn.execute(
             """
             INSERT INTO searches (
@@ -295,7 +301,7 @@ class Database:
                 min_price,
                 condition,
                 1 if buy_it_now else 0,
-                json.dumps(filters_json or {}),
+                json.dumps(filters),
                 now,
                 now,
             ),

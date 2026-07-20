@@ -111,7 +111,7 @@ class PollerService:
                 **kwargs,
             )
 
-        provider = await self._build_provider(user, search.source)
+        provider = await self._build_provider(user, search)
         try:
             try:
                 listings = await provider.search(search, limit=20)
@@ -198,9 +198,11 @@ class PollerService:
         )
         return sent
 
-    async def _build_provider(self, user: User, source: Source) -> BaseProvider:
-        if source is Source.EBAY_API:
+    async def _build_provider(self, user: User, search: Search) -> BaseProvider:
+        if search.source is Source.EBAY_API:
             return await self.credentials.build_ebay_api_provider(
-                user, proxy=self.proxy or None
+                user,
+                proxy=self.proxy or None,
+                marketplace_id=search.marketplace or user.ebay_marketplace,
             )
-        return get_provider(source, proxy=self.proxy or None)
+        return get_provider(search.source, proxy=self.proxy or None)
