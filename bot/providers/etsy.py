@@ -13,13 +13,12 @@ from bs4 import BeautifulSoup
 from bot.models import Listing, Search, Source
 from bot.providers.base import BaseProvider, ProviderError
 from bot.providers.http_utils import (
-    USER_AGENT,
     build_client,
     parse_price_text,
     request_with_retries,
     truncate,
 )
-from bot.providers.etsy_browser import get_browser
+from bot.providers.etsy_browser import fetch_search_html
 from bot.providers.listing_meta import parse_shipping_info
 
 logger = logging.getLogger(__name__)
@@ -133,53 +132,23 @@ class EtsyProvider(BaseProvider):
         return f"https://www.etsy.com/search?{urlencode(params)}"
 
     async def _search_via_playwright(self, search: Search, *, limit: int) -> list[Listing]:
-        """Загрузка выдачи через реальный Chromium — проходит DataDome на VPS."""
+        """Загрузка выдачи через Camoufox/Playwright (обход DataDome)."""
         url = self._search_url(search)
-        context = None
         try:
-            browser = await get_browser()
-            context_kwargs: dict[str, Any] = {
-                "user_agent": USER_AGENT,
-                "viewport": {"width": 1366, "height": 900},
-                "locale": "en-US",
-                "timezone_id": "America/New_York",
-            }
-            if self._proxy:
-                context_kwargs["proxy"] = {"server": self._proxy}
-            context = await browser.new_context(**context_kwargs)
-            await context.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-            )
-            page = await context.new_page()
-            await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-            # DataDome / гидрация карточек
-            try:
-                await page.wait_for_selector(
-                    "a[href*='/listing/'], [data-search-results] a[href*='/listing/']",
-                    timeout=35_000,
-                )
-            except Exception:
-                # подождём ещё чуть-чуть и снимем HTML как есть
-                await page.wait_for_timeout(2500)
-            html = await page.content()
+            html = await fetch_search_html(url, proxy=self._proxy)
         except Exception as exc:
-            raise ProviderError(f"Etsy Playwright failed: {exc}") from exc
-        finally:
-            if context is not None:
-                try:
-                    await context.close()
-                except Exception:
-                    pass
+            raise ProviderError(f"Etsy browser failed: {exc}") from exc
 
         if _looks_like_datadome(html) and "/listing/" not in html:
             raise ProviderError(
-                "Etsy Playwright: страница заблокирована DataDome. "
-                "Попробуйте позже или HTTP_PROXY."
+                "Etsy: DataDome блокирует IP VPS (даже Camoufox/Playwright). "
+                "Нужен residential HTTP_PROXY в .env — "
+                "с этого сервера прямой доступ к etsy.com для ботов закрыт."
             )
 
         listings = _parse_search_html(html, limit=limit)
         if not listings:
-            logger.warning("Etsy Playwright returned 0 items for %r", search.keywords)
+            logger.warning("Etsy browser returned 0 items for %r", search.keywords)
         return listings
 
     async def _search_via_html(self, search: Search, *, limit: int) -> list[Listing]:
