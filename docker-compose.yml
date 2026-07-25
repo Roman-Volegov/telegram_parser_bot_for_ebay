@@ -18,9 +18,14 @@ services:
       DATABASE_PATH: /app/data/bot.db
       WEB_HOST: 0.0.0.0
       WEB_PORT: 8080
+      ETSY_BROWSER_HEADLESS: "false"
+      ETSY_BROWSER_PROFILE_DIR: /app/data/etsy-browser-profile
+      ETSY_NOVNC_PASSWORD: ${ETSY_NOVNC_PASSWORD:-}
     # прямой доступ оставляем на 18080 (HTTP) для отладки/health
     ports:
       - "18080:8080"
+      # Только через SSH-туннель: localhost:16080 -> noVNC контейнера
+      - "127.0.0.1:16080:6080"
 
   caddy:
     image: caddy:2.8-alpine

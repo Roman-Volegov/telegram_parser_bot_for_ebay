@@ -132,7 +132,7 @@ class EtsyProvider(BaseProvider):
         return f"https://www.etsy.com/search?{urlencode(params)}"
 
     async def _search_via_playwright(self, search: Search, *, limit: int) -> list[Listing]:
-        """Загрузка выдачи через Camoufox/Playwright (обход DataDome)."""
+        """Загрузка выдачи через постоянный профиль Playwright."""
         url = self._search_url(search)
         try:
             html = await fetch_search_html(url, proxy=self._proxy)
@@ -141,8 +141,8 @@ class EtsyProvider(BaseProvider):
 
         if _looks_like_datadome(html) and "/listing/" not in html:
             raise ProviderError(
-                "Etsy: DataDome блокирует IP VPS даже для Playwright. "
-                "Добавьте residential HTTP_PROXY в .env и перезапустите контейнер."
+                "Etsy запрашивает проверку DataDome. Откройте noVNC, "
+                "пройдите CAPTCHA вручную и повторите поиск."
             )
 
         listings = _parse_search_html(html, limit=limit)

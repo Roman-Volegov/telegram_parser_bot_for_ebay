@@ -59,6 +59,19 @@ sudo docker compose up -d --build
 - Public landing page (English): `https://<IP>.sslip.io:8443/`
 - Контейнеры: `ebay-poshmark-bot`, `ebay-poshmark-caddy`
 
+### Ручная проверка Etsy DataDome
+
+Etsy работает в постоянном Chromium-профиле. Укажите
+`ETSY_NOVNC_PASSWORD` в `.env`, затем создайте SSH-туннель:
+
+```bash
+ssh -L 6080:127.0.0.1:16080 deploy@<VPS_IP>
+```
+
+Откройте `http://127.0.0.1:6080/vnc.html`, нажмите **Connect**, введите
+пароль и вручную пройдите CAPTCHA Etsy. Профиль и cookie сохраняются в
+Docker volume. Порт noVNC доступен только на loopback-интерфейсе VPS.
+
 ### Mini App
 Открывается кнопкой **📱 Mini App**, командой `/app` или menu button бота.  
 Авторизация через Telegram `initData` (HMAC).
@@ -87,6 +100,7 @@ bot/
 - Секреты eBay шифруются Fernet; ciphertext привязан к `telegram_id` (AAD).
 - Сообщения с Client Secret удаляются из чата.
 - Poshmark — HTML-парсер публичной выдачи (вёрстка может меняться).
-- Etsy — по умолчанию **Playwright (Chromium)** обходит DataDome без API-ключа.
+- Etsy — **Playwright (Chromium)** с постоянным профилем; первичная проверка
+  DataDome проходится вручную через защищённый SSH-туннелем noVNC.
   Опционально Open API v3 (`keystring:shared_secret`) в Mini App, шифруется как eBay.
 - Для Production eBay keyset укажите deletion URL и verification token из `/setup`.
