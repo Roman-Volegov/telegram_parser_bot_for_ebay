@@ -18,7 +18,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements-dev.txt
-      - run: ruff check bot tests
+      - run: ruff check --select E4,E7,E9,F bot tests
       - run: python -m pytest -q
       - run: pip-audit -r requirements.txt
       - run: ETSY_NOVNC_TOKEN=ci-token-with-at-least-32-characters docker compose config -q

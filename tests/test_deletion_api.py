@@ -84,7 +84,7 @@ class DeletionApiTests(unittest.IsolatedAsyncioTestCase):
 
         auth = self.client.get(
             "/internal/etsy-vnc-auth",
-            cookies={ETSY_VNC_COOKIE: ticket},
+            headers={"Cookie": f"{ETSY_VNC_COOKIE}={ticket}"},
         )
         self.assertEqual(auth.status_code, 204)
         reused = self.client.get(ticket_url, follow_redirects=False)
