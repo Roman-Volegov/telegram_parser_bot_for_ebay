@@ -141,9 +141,8 @@ class EtsyProvider(BaseProvider):
 
         if _looks_like_datadome(html) and "/listing/" not in html:
             raise ProviderError(
-                "Etsy: DataDome блокирует IP VPS (даже Camoufox/Playwright). "
-                "Нужен residential HTTP_PROXY в .env — "
-                "с этого сервера прямой доступ к etsy.com для ботов закрыт."
+                "Etsy: DataDome блокирует IP VPS даже для Playwright. "
+                "Добавьте residential HTTP_PROXY в .env и перезапустите контейнер."
             )
 
         listings = _parse_search_html(html, limit=limit)

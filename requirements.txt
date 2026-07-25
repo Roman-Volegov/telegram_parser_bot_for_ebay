@@ -11,4 +11,3 @@ cryptography>=43.0,<47
 fastapi>=0.115,<1
 uvicorn[standard]>=0.30,<1
 playwright>=1.49,<2
-camoufox[geoip]>=0.4,<1
