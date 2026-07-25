@@ -342,6 +342,7 @@ def create_api_router(
         etsy_keystring = (payload.etsy_keystring or "").strip()
         etsy_secret = (payload.etsy_shared_secret or "").strip()
         etsy_api_key = normalize_etsy_api_key(etsy_keystring, etsy_secret)
+        wants_etsy = Source.ETSY in payload.enabled_sources
         etsy_verified = False
 
         if wants_api:

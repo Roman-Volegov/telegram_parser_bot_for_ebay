@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from bot.crypto import CredentialsCrypto
 from bot.db import Database
-from bot.models import Source, User
+from bot.models import User
 from bot.providers.ebay_api import EbayApiProvider
 from bot.providers.etsy import EtsyProvider
 
