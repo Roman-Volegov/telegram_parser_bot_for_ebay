@@ -16,7 +16,7 @@ services:
       - ebay_bot_data:/app/data
     # Chromium (Playwright) нужен shared memory
     shm_size: "512mb"
-    mem_limit: 1200m
+    mem_limit: 1400m
     mem_reservation: 512m
     cpus: 0.90
     pids_limit: 256
