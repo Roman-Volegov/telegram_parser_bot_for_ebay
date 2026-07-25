@@ -24,6 +24,7 @@ def create_app(
     *,
     bot_token: str,
     credentials: CredentialsService,
+    bot_username: str = "",
     poller: PollerService | None = None,
     http_proxy: str = "",
     etsy_vnc_access: EtsyVncAccess | None = None,
@@ -39,6 +40,7 @@ def create_app(
             bot_token,
             credentials=credentials,
             public_base_url=public_base_url,
+            bot_username=bot_username,
             http_proxy=http_proxy,
             poller=poller,
         )
@@ -52,6 +54,10 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=503, detail="database unavailable") from exc
         return {"ok": True}
+
+    @app.get("/public-config")
+    async def public_config():
+        return {"bot_username": bot_username}
 
     if WEBAPP_DIR.exists():
         app.mount("/app/static", StaticFiles(directory=WEBAPP_DIR), name="webapp-static")

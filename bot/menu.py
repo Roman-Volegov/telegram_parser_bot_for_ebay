@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from aiogram import Bot
 from aiogram.types import (
     BotCommand,
@@ -12,6 +14,8 @@ from aiogram.types import (
     ReplyKeyboardRemove,
     WebAppInfo,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class Btn:
@@ -107,7 +111,11 @@ async def setup_bot_commands(
                 scope=BotCommandScopeChat(chat_id=admin_id),
             )
         except Exception:
-            pass
+            logger.warning(
+                "Failed to set admin commands for chat=%s",
+                admin_id,
+                exc_info=True,
+            )
 
     if webapp_url and webapp_url.startswith("https://"):
         await bot.set_chat_menu_button(

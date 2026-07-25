@@ -49,7 +49,7 @@
         Save keyword searches on Etsy — DecoParser checks them for you and pings you when something fresh shows up.
       </p>
       <div class="cta-row reveal reveal--delay-3">
-        <a class="cta" href="https://t.me/DecoParser_bot">Open in Telegram</a>
+        <a class="cta" data-bot-link href="#">Open in Telegram</a>
         <a class="cta cta--ghost" href="#how">How it works</a>
       </div>
     </div>
@@ -63,7 +63,7 @@
         <li>
           <span class="steps__n">01</span>
           <h3>Request access</h3>
-          <p>Message <a href="https://t.me/DecoParser_bot">@DecoParser_bot</a> and wait for approval.</p>
+          <p>Message <a data-bot-link data-bot-name href="#">the Telegram bot</a> and wait for approval.</p>
         </li>
         <li>
           <span class="steps__n">02</span>
@@ -102,14 +102,28 @@
         <li>Per-user setup, approval flow, and admin controls</li>
       </ul>
       <p class="close-cta">
-        <a class="cta" href="https://t.me/DecoParser_bot">Start with @DecoParser_bot</a>
+        <a class="cta" data-bot-link data-bot-prefix="Start with " href="#">Start in Telegram</a>
       </p>
     </section>
   </main>
 
   <footer class="footer">
     <p><strong>DecoParser</strong> — Etsy alerts for Telegram</p>
-    <p><a href="https://t.me/DecoParser_bot">t.me/DecoParser_bot</a></p>
+    <p><a data-bot-link data-bot-url href="#">Telegram bot</a></p>
   </footer>
+  <script>
+    fetch("/public-config")
+      .then((response) => response.json())
+      .then(({ bot_username: username }) => {
+        if (!username) return;
+        document.querySelectorAll("[data-bot-link]").forEach((link) => {
+          link.href = `https://t.me/${username}`;
+          if (link.dataset.botName !== undefined) link.textContent = `@${username}`;
+          if (link.dataset.botPrefix !== undefined) link.textContent = `${link.dataset.botPrefix}@${username}`;
+          if (link.dataset.botUrl !== undefined) link.textContent = `t.me/${username}`;
+        });
+      })
+      .catch(() => {});
+  </script>
 </body>
 </html>

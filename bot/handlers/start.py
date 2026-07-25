@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from aiogram import Bot, Router
 from aiogram.filters import CommandStart
 from aiogram.types import Message
@@ -11,6 +13,7 @@ from bot.menu import open_miniapp_inline_kb, remove_menu_kb, webapp_url_from_bas
 from bot.models import UserStatus
 
 router = Router(name="start")
+logger = logging.getLogger(__name__)
 
 
 @router.message(CommandStart())
@@ -82,4 +85,9 @@ async def cmd_start(message: Message, bot: Bot, db: Database, settings: Settings
                     reply_markup=admin_review_kb(message.from_user.id),
                 )
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to notify admin=%s about user=%s",
+                    admin_id,
+                    message.from_user.id,
+                    exc_info=True,
+                )

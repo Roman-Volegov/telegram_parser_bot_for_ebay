@@ -1,5 +1,6 @@
 import hashlib
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from bot.providers.ebay_parser import _extract_ebay_item_id, _parse_html_listings
 from bot.providers.etsy import (
@@ -9,7 +10,12 @@ from bot.providers.etsy import (
     _parse_api_listings,
     _parse_search_html,
 )
-from bot.providers.http_utils import BROWSER_HEADERS, parse_price_text, truncate
+from bot.providers.http_utils import (
+    BROWSER_HEADERS,
+    parse_price_text,
+    request_with_retries,
+    truncate,
+)
 from bot.providers.poshmark import _extract_poshmark_id, _extract_shipping_from_detail as _posh_ship
 from bot.handlers.searches import _parse_filters
 from bot.web.deletion import deletion_endpoint
@@ -169,6 +175,20 @@ class HelpersTests(unittest.TestCase):
         digest = hashlib.sha256((challenge + token + endpoint).encode()).hexdigest()
         self.assertEqual(len(digest), 64)
         self.assertNotIn(token, endpoint)
+
+
+class HttpRetryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_successful_first_request_has_no_delay(self):
+        response = AsyncMock()
+        response.status_code = 200
+        client = AsyncMock()
+        client.request.return_value = response
+
+        with patch("bot.providers.http_utils.asyncio.sleep", new=AsyncMock()) as sleep:
+            result = await request_with_retries(client, "GET", "https://example.com")
+
+        self.assertIs(result, response)
+        sleep.assert_not_awaited()
 
 
 if __name__ == "__main__":

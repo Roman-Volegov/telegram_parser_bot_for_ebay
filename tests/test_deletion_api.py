@@ -70,6 +70,10 @@ class DeletionApiTests(unittest.IsolatedAsyncioTestCase):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
 
+    async def test_api_requires_telegram_auth(self):
+        response = self.client.get("/api/me")
+        self.assertEqual(response.status_code, 401)
+
     async def test_etsy_access_ticket_is_single_use(self):
         ticket_url = self.etsy_access.create_ticket_url()
         response = self.client.get(ticket_url, follow_redirects=False)

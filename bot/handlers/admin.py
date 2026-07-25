@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
@@ -12,6 +14,7 @@ from bot.menu import Btn, open_miniapp_inline_kb, remove_menu_kb, webapp_url_fro
 from bot.models import UserStatus
 
 router = Router(name="admin")
+logger = logging.getLogger(__name__)
 
 
 def _format_user_line(user) -> str:
@@ -127,7 +130,7 @@ async def _set_status_and_notify(
                     reply_markup=inline,
                 )
     except Exception:
-        pass
+        logger.warning("Failed to notify user=%s about status", telegram_id, exc_info=True)
 
 
 @router.message(Command("approve"))
@@ -231,4 +234,4 @@ async def admin_callbacks(
         try:
             await callback.message.edit_reply_markup(reply_markup=None)
         except Exception:
-            pass
+            logger.debug("Failed to clear admin action keyboard", exc_info=True)

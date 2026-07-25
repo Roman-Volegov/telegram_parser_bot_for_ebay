@@ -242,7 +242,7 @@ def _api_error_detail(response: httpx.Response) -> str:
         if isinstance(data, dict):
             return str(data.get("error") or data.get("error_description") or data)[:240]
     except Exception:
-        pass
+        logger.debug("Failed to parse Etsy API error response", exc_info=True)
     return (response.text or "")[:240]
 
 

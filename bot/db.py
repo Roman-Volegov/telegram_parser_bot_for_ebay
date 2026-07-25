@@ -566,6 +566,17 @@ class Database:
         new_min = None if clear_min_price else (min_price if min_price is not None else search.min_price)
         new_condition = condition if condition is not None else search.condition
         new_bin = search.buy_it_now if buy_it_now is None else buy_it_now
+        criteria_changed = any(
+            (
+                keywords is not None,
+                max_price is not None,
+                min_price is not None,
+                condition is not None,
+                buy_it_now is not None,
+                clear_max_price,
+                clear_min_price,
+            )
+        )
         await self.conn.execute(
             """
             UPDATE searches
@@ -585,6 +596,11 @@ class Database:
                 telegram_id,
             ),
         )
+        if criteria_changed:
+            await self.conn.execute(
+                "DELETE FROM seen_items WHERE search_id = ?",
+                (search_id,),
+            )
         await self.conn.commit()
         return await self.get_search(search_id)
 

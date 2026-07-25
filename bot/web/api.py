@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -22,6 +23,8 @@ from bot.services.poller import PollerService
 from bot.web.deletion import deletion_endpoint
 from bot.web.telegram_auth import TelegramAuthError, validate_init_data
 
+logger = logging.getLogger(__name__)
+
 
 class SearchCreateIn(BaseModel):
     source: Source
@@ -41,6 +44,8 @@ class SearchUpdateIn(BaseModel):
     buy_it_now: bool | None = None
     paused: bool | None = None
     clear_prices: bool = False
+    clear_min_price: bool = False
+    clear_max_price: bool = False
 
 
 class SetupIn(BaseModel):
@@ -58,6 +63,7 @@ def create_api_router(
     *,
     credentials: CredentialsService,
     public_base_url: str,
+    bot_username: str = "",
     http_proxy: str = "",
     poller: PollerService | None = None,
 ) -> APIRouter:
@@ -100,6 +106,7 @@ def create_api_router(
             "telegram_id": user.telegram_id,
             "username": user.username,
             "full_name": user.full_name,
+            "bot_username": bot_username,
             "status": user.status.value,
             "setup_completed": user.setup_completed,
             "enabled_sources": [s.value for s in user.enabled_sources],
@@ -251,7 +258,12 @@ def create_api_router(
                     parse_mode="HTML",
                 )
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to notify user=%s about new search=%s",
+                    user.telegram_id,
+                    search.id,
+                    exc_info=True,
+                )
         return {
             "id": search.id,
             "ok": True,
@@ -282,11 +294,25 @@ def create_api_router(
             max_price=payload.max_price,
             condition=payload.condition,
             buy_it_now=payload.buy_it_now,
-            clear_max_price=payload.clear_prices,
-            clear_min_price=payload.clear_prices,
+            clear_max_price=payload.clear_prices or payload.clear_max_price,
+            clear_min_price=payload.clear_prices or payload.clear_min_price,
         )
         if updated is None:
             raise HTTPException(status_code=404, detail="Поиск не найден")
+        criteria_changed = any(
+            (
+                payload.keywords is not None,
+                payload.min_price is not None,
+                payload.max_price is not None,
+                payload.condition is not None,
+                payload.buy_it_now is not None,
+                payload.clear_prices,
+                payload.clear_min_price,
+                payload.clear_max_price,
+            )
+        )
+        if criteria_changed and poller is not None:
+            poller.schedule_search(updated, notify=False, record_log=False)
         return {"ok": True, "paused": updated.paused}
 
     @router.delete("/searches/{search_id}")

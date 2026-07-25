@@ -52,6 +52,12 @@
     toast: document.getElementById("toast"),
     errorScreen: document.getElementById("error-screen"),
     errorText: document.getElementById("error-text"),
+    botUsername: document.getElementById("bot-username"),
+    editDialog: document.getElementById("edit-dialog"),
+    editId: document.getElementById("edit-id"),
+    editKeywords: document.getElementById("edit-keywords"),
+    editMin: document.getElementById("edit-min"),
+    editMax: document.getElementById("edit-max"),
   };
 
   function initData() {
@@ -245,6 +251,7 @@
           ${priceBits.length ? escapeHtml(priceBits.join(" · ")) : "без фильтра цены"}
         </p>
         <div class="actions">
+          <button class="chip" data-action="edit" data-id="${item.id}" type="button">✏️ Изменить</button>
           <button class="chip" data-action="toggle" data-id="${item.id}" type="button">
             ${item.paused ? "▶️ Включить" : "⏸ Пауза"}
           </button>
@@ -315,6 +322,9 @@
     state.me = await api("/me");
     const name = state.me.username ? `@${state.me.username}` : "профиль";
     els.greeting.textContent = state.me.setup_completed ? name : "Сначала настройки";
+    if (state.me.bot_username) {
+      els.botUsername.textContent = `@${state.me.bot_username}`;
+    }
     fillSettings();
     const list = await api("/searches");
     state.searches = list.items || [];
@@ -383,6 +393,15 @@
     const id = Number(btn.dataset.id);
     const action = btn.dataset.action;
     try {
+      if (action === "edit") {
+        const item = state.searches.find((search) => search.id === id);
+        els.editId.value = String(item.id);
+        els.editKeywords.value = item.keywords;
+        els.editMin.value = item.min_price ?? "";
+        els.editMax.value = item.max_price ?? "";
+        els.editDialog.showModal();
+        return;
+      }
       if (action === "toggle") {
         const item = state.searches.find((s) => s.id === id);
         await api(`/searches/${id}`, {
@@ -403,6 +422,40 @@
       switchTab("searches");
     } catch (err) {
       toast(err.message);
+    }
+  });
+
+  document.getElementById("btn-edit-cancel").addEventListener("click", () => {
+    els.editDialog.close();
+  });
+
+  document.getElementById("form-edit").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const id = Number(els.editId.value);
+    const minValue = els.editMin.value;
+    const maxValue = els.editMax.value;
+    const payload = {
+      keywords: els.editKeywords.value.trim(),
+      min_price: numOrNull(minValue),
+      max_price: numOrNull(maxValue),
+      clear_min_price: minValue === "",
+      clear_max_price: maxValue === "",
+    };
+    try {
+      await api(`/searches/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+      els.editDialog.close();
+      await loadAll();
+      switchTab("searches");
+      toast("Поиск обновлён");
+    } catch (err) {
+      if (tg?.showAlert) {
+        await new Promise((resolve) => tg.showAlert(err.message || "Ошибка", resolve));
+      } else {
+        toast(err.message);
+      }
     }
   });
 
@@ -487,7 +540,11 @@
         switchTab("searches");
       }
     } catch (err) {
-      toast(err.message);
+      if (tg?.showAlert) {
+        await new Promise((resolve) => tg.showAlert(err.message || "Ошибка", resolve));
+      } else {
+        toast(err.message);
+      }
       tg?.HapticFeedback?.notificationOccurred("error");
     }
   });

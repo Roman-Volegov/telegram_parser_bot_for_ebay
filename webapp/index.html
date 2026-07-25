@@ -133,11 +133,36 @@
       </section>
     </main>
 
+    <dialog id="edit-dialog">
+      <form id="form-edit" class="form" method="dialog">
+        <h2 class="section-title">Изменить поиск</h2>
+        <input id="edit-id" type="hidden" />
+        <label>
+          Ключевые слова
+          <input id="edit-keywords" type="text" minlength="2" maxlength="200" required />
+        </label>
+        <div class="row">
+          <label>
+            Цена от
+            <input id="edit-min" type="number" min="0" step="0.01" />
+          </label>
+          <label>
+            Цена до
+            <input id="edit-max" type="number" min="0" step="0.01" />
+          </label>
+        </div>
+        <div class="actions">
+          <button class="primary" type="submit">Сохранить</button>
+          <button class="chip" id="btn-edit-cancel" type="button">Отмена</button>
+        </div>
+      </form>
+    </dialog>
+
     <div id="toast" class="toast hidden"></div>
     <div id="error-screen" class="error-screen hidden">
       <h2>Нет доступа</h2>
       <p id="error-text"></p>
-      <p class="hint">Откройте бота @DecoParser_bot и нажмите /start</p>
+      <p class="hint">Откройте <span id="bot-username">бота</span> и нажмите /start</p>
     </div>
   </div>
   <script src="/app/app.js"></script>

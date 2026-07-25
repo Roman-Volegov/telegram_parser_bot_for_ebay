@@ -54,6 +54,7 @@ async def main() -> None:
         token=settings.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    bot_info = await bot.get_me()
     storage = (
         RedisStorage.from_url(settings.redis_url)
         if settings.redis_url
@@ -85,6 +86,7 @@ async def main() -> None:
         settings.public_base_url,
         bot_token=settings.telegram_bot_token,
         credentials=credentials,
+        bot_username=bot_info.username or "",
         poller=poller,
         http_proxy=settings.http_proxy,
         etsy_vnc_access=etsy_vnc_access,

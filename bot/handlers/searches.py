@@ -407,7 +407,11 @@ async def edit_keywords(message: Message, state: FSMContext) -> None:
 
 @router.message(StateFilter(EditSearchStates.filters))
 async def edit_filters(
-    message: Message, state: FSMContext, db: Database, user: User
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    user: User,
+    poller: PollerService,
 ) -> None:
     text = (message.text or "").strip()
     if text.lower() == "отмена":
@@ -445,6 +449,7 @@ async def edit_filters(
     if updated is None:
         await message.answer("Не удалось обновить.")
         return
+    poller.schedule_search(updated, notify=False, record_log=False)
     await message.answer("Обновлено:\n" + _format_search(updated), parse_mode="HTML")
 
 
