@@ -1,5 +1,9 @@
-# HTTPS для Mini App (хост 8443 -> контейнер 443). Порт 443 на VPS занят xray — не трогаем.
-{$MINIAPP_DOMAIN:78.17.135.134.sslip.io} {
+# Порт 443 хоста занят xray; Caddy HTTPS опубликован на 8443.
+http://{$MINIAPP_DOMAIN} {
+	redir https://{$MINIAPP_DOMAIN}:8443{uri} permanent
+}
+
+https://{$MINIAPP_DOMAIN} {
 	encode gzip
 
 	handle_path /{$ETSY_NOVNC_TOKEN}/* {
@@ -10,6 +14,12 @@
 	}
 
 	handle {
+		header {
+			Referrer-Policy "same-origin"
+			X-Content-Type-Options "nosniff"
+			X-Frame-Options "SAMEORIGIN"
+			Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		}
 		reverse_proxy bot:8080
 	}
 }

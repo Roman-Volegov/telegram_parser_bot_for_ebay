@@ -19,6 +19,7 @@ from bot.providers.ebay_api import EbayApiProvider
 from bot.providers.etsy import EtsyProvider
 from bot.services.credentials import CredentialsService, normalize_etsy_api_key
 from bot.services.poller import PollerService
+from bot.web.deletion import deletion_endpoint
 from bot.web.telegram_auth import TelegramAuthError, validate_init_data
 
 
@@ -90,7 +91,11 @@ def create_api_router(
         deletion_url = None
         if has_keys or Source.EBAY_API in user.enabled_sources:
             deletion_token = await db.ensure_deletion_token(user.telegram_id)
-            deletion_url = f"{public_base_url.rstrip('/')}/ebay/deletion/{user.telegram_id}"
+            deletion_url = deletion_endpoint(
+                public_base_url,
+                user.telegram_id,
+                deletion_token,
+            )
         return {
             "telegram_id": user.telegram_id,
             "username": user.username,

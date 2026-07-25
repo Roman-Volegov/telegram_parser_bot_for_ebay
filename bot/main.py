@@ -9,6 +9,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.redis import RedisStorage
 
 from bot.config import get_settings
 from bot.crypto import CredentialsCrypto
@@ -53,7 +54,12 @@ async def main() -> None:
         token=settings.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dp = Dispatcher(storage=MemoryStorage())
+    storage = (
+        RedisStorage.from_url(settings.redis_url)
+        if settings.redis_url
+        else MemoryStorage()
+    )
+    dp = Dispatcher(storage=storage)
     poller = PollerService(
         bot,
         db,
@@ -89,6 +95,8 @@ async def main() -> None:
         port=settings.web_port,
         log_level=settings.log_level.lower(),
         loop="asyncio",
+        proxy_headers=True,
+        forwarded_allow_ips="*",
     )
     server = uvicorn.Server(config)
 
@@ -119,6 +127,7 @@ async def main() -> None:
         except Exception:
             logger.debug("Etsy browser shutdown skipped", exc_info=True)
         await db.close()
+        await dp.storage.close()
         await bot.session.close()
 
 

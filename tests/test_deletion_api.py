@@ -11,6 +11,7 @@ from bot.db import Database
 from bot.services.credentials import CredentialsService
 from bot.services.etsy_access import ETSY_VNC_COOKIE, EtsyVncAccess
 from bot.web.app import create_app
+from bot.web.deletion import deletion_endpoint
 
 
 class DeletionApiTests(unittest.IsolatedAsyncioTestCase):
@@ -20,6 +21,12 @@ class DeletionApiTests(unittest.IsolatedAsyncioTestCase):
         await self.db.connect()
         await self.db.upsert_pending_user(10, "u", "User")
         self.token = await self.db.ensure_deletion_token(10)
+        self.deletion_endpoint = deletion_endpoint(
+            "https://example.com",
+            10,
+            self.token,
+        )
+        self.deletion_path = self.deletion_endpoint.removeprefix("https://example.com")
         credentials = CredentialsService(
             self.db, CredentialsCrypto(Fernet.generate_key().decode())
         )
@@ -39,7 +46,7 @@ class DeletionApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_challenge(self):
         response = self.client.get(
-            "/ebay/deletion/10",
+            self.deletion_path,
             params={"challenge_code": "hello"},
         )
         self.assertEqual(response.status_code, 200)
@@ -48,9 +55,16 @@ class DeletionApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(body["challengeResponse"]), 64)
 
     async def test_post_ok(self):
-        response = self.client.post("/ebay/deletion/10", json={"notification": {}})
+        response = self.client.post(self.deletion_path, json={"notification": {}})
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
+
+    async def test_deletion_rejects_unknown_route(self):
+        response = self.client.post(
+            "/ebay/deletion/10/not-the-route-token",
+            json={"notification": {}},
+        )
+        self.assertEqual(response.status_code, 404)
 
     async def test_health(self):
         response = self.client.get("/health")

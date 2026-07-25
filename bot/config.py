@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     web_host: str = Field(default="0.0.0.0", alias="WEB_HOST")
     web_port: int = Field(default=8080, alias="WEB_PORT")
+    redis_url: str = Field(default="", alias="REDIS_URL")
     http_proxy: str = Field(default="", alias="HTTP_PROXY")
     etsy_novnc_token: str = Field(default="", alias="ETSY_NOVNC_TOKEN")
     etsy_novnc_ttl_sec: int = Field(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -13,6 +13,7 @@ from bot.services.poller import PollerService
 from bot.web.api import create_api_router
 from bot.web.deletion import create_deletion_router
 from bot.web.etsy_access import create_etsy_access_router
+from bot.web.rate_limit import RateLimitMiddleware
 
 WEBAPP_DIR = Path(__file__).resolve().parents[2] / "webapp"
 
@@ -28,6 +29,7 @@ def create_app(
     etsy_vnc_access: EtsyVncAccess | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DecoParser web", docs_url=None, redoc_url=None)
+    app.add_middleware(RateLimitMiddleware)
     app.include_router(create_deletion_router(db, public_base_url))
     if etsy_vnc_access is not None:
         app.include_router(create_etsy_access_router(etsy_vnc_access))
@@ -44,6 +46,11 @@ def create_app(
 
     @app.get("/health")
     async def health():
+        try:
+            cursor = await db.conn.execute("SELECT 1")
+            await cursor.fetchone()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="database unavailable") from exc
         return {"ok": True}
 
     if WEBAPP_DIR.exists():

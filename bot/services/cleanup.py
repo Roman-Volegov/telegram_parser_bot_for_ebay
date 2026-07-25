@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 from datetime import datetime, timedelta, timezone
 
 from bot.db import Database
@@ -38,6 +39,14 @@ class CleanupService:
                 deleted = await self.db.cleanup_seen_items(self.ttl_days)
                 if deleted:
                     logger.info("Cleanup removed %s seen_items", deleted)
+                usage = shutil.disk_usage(self.db.path)
+                free_ratio = usage.free / usage.total
+                if usage.free < 1024**3 or free_ratio < 0.15:
+                    logger.warning(
+                        "Low disk space: %.1f MiB free (%.1f%%)",
+                        usage.free / 1024**2,
+                        free_ratio * 100,
+                    )
             except Exception:
                 logger.exception("Cleanup failed")
             # Ждём до следующего дня (или ~24ч)

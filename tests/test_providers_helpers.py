@@ -12,6 +12,7 @@ from bot.providers.etsy import (
 from bot.providers.http_utils import BROWSER_HEADERS, parse_price_text, truncate
 from bot.providers.poshmark import _extract_poshmark_id, _extract_shipping_from_detail as _posh_ship
 from bot.handlers.searches import _parse_filters
+from bot.web.deletion import deletion_endpoint
 
 
 class HelpersTests(unittest.TestCase):
@@ -164,9 +165,10 @@ class HelpersTests(unittest.TestCase):
     def test_deletion_challenge_hash(self):
         challenge = "abc"
         token = "tok"
-        endpoint = "https://example.com/ebay/deletion/1"
+        endpoint = deletion_endpoint("https://example.com", 1, token)
         digest = hashlib.sha256((challenge + token + endpoint).encode()).hexdigest()
         self.assertEqual(len(digest), 64)
+        self.assertNotIn(token, endpoint)
 
 
 if __name__ == "__main__":

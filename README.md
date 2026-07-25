@@ -11,7 +11,7 @@
 - Карточки: фото, цена, описание, URL-кнопка
 - Поллер (`POLL_INTERVAL_SEC`, по умолчанию 5 мин), тихий первый прогон
 - Cleanup `seen_items` старше 90 дней
-- FastAPI: `GET/POST /ebay/deletion/{telegram_id}`
+- FastAPI: защищённый `GET/POST /ebay/deletion/{telegram_id}/{route_token}`
 
 ## Быстрый старт
 

@@ -6,12 +6,20 @@ services:
     build: .
     container_name: ebay-poshmark-bot
     restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
     env_file:
       - .env
     volumes:
       - ebay_bot_data:/app/data
     # Chromium (Playwright) нужен shared memory
     shm_size: "512mb"
+    mem_limit: 1200m
+    mem_reservation: 512m
+    cpus: 0.90
+    pids_limit: 256
     expose:
       - "8080"
       - "6080"
@@ -19,34 +27,81 @@ services:
       DATABASE_PATH: /app/data/bot.db
       WEB_HOST: 0.0.0.0
       WEB_PORT: 8080
+      REDIS_URL: redis://redis:6379/0
       ETSY_BROWSER_HEADLESS: "false"
       ETSY_BROWSER_PROFILE_DIR: /app/data/etsy-browser-profile
       ETSY_NOVNC_TOKEN: ${ETSY_NOVNC_TOKEN:?Set ETSY_NOVNC_TOKEN in .env}
       ETSY_NOVNC_TTL_SEC: ${ETSY_NOVNC_TTL_SEC:-600}
     # прямой доступ оставляем на 18080 (HTTP) для отладки/health
     ports:
-      - "18080:8080"
+      - "127.0.0.1:18080:8080"
       # Только через SSH-туннель: localhost:16080 -> noVNC контейнера
       - "127.0.0.1:16080:6080"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:8-alpine
+    container_name: ebay-poshmark-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - ebay_redis_data:/data
+    mem_limit: 96m
+    cpus: 0.10
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
 
   caddy:
-    image: caddy:2.8-alpine
+    image: caddy:2.11.4-alpine
     container_name: ebay-poshmark-caddy
     restart: unless-stopped
     depends_on:
-      - bot
+      bot:
+        condition: service_healthy
+    mem_limit: 128m
+    cpus: 0.20
+    pids_limit: 64
     ports:
       - "80:80"
       - "8443:443"
     environment:
-      MINIAPP_DOMAIN: ${MINIAPP_DOMAIN:-78.17.135.134.sslip.io}
+      MINIAPP_DOMAIN: ${MINIAPP_DOMAIN:?Set MINIAPP_DOMAIN in .env}
       ETSY_NOVNC_TOKEN: ${ETSY_NOVNC_TOKEN:?Set ETSY_NOVNC_TOKEN in .env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   ebay_bot_data:
+  ebay_redis_data:
   caddy_data:
   caddy_config:
