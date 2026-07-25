@@ -226,13 +226,10 @@ async def add_confirm(
     await state.clear()
     await callback.message.edit_text(
         f"✅ Новый поиск создан.\n{_format_search(search)}\n\n"
-        "Делаю тихий первый прогон (без спама старыми лотами)…",
+        "Тихий первый прогон запущен в фоне (без спама старыми лотами).",
         parse_mode="HTML",
     )
-    await poller.process_search(search, notify=False, record_log=False)
-    await callback.message.answer(
-        f"✅ Поиск #{search.id} готов. Новые лоты будут приходить в этот чат."
-    )
+    poller.schedule_search(search, notify=False, record_log=False)
     await callback.answer()
 
 

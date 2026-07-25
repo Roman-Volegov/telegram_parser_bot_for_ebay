@@ -39,6 +39,14 @@ class PollerService:
         self._stopped = asyncio.Event()
         self._etsy_captcha_notified_at: dict[int, float] = {}
         self._search_locks: dict[int, asyncio.Lock] = {}
+        self._background_tasks: set[asyncio.Task] = set()
+        self._public_providers: dict[Source, BaseProvider] = {}
+        self._source_semaphores = {
+            Source.ETSY: asyncio.Semaphore(1),
+            Source.EBAY_API: asyncio.Semaphore(5),
+            Source.EBAY_PARSER: asyncio.Semaphore(4),
+            Source.POSHMARK: asyncio.Semaphore(4),
+        }
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -54,6 +62,38 @@ class PollerService:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        for task in self._background_tasks:
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+        self._background_tasks.clear()
+        for provider in self._public_providers.values():
+            await provider.aclose()
+        self._public_providers.clear()
+
+    def schedule_search(
+        self,
+        search: Search,
+        *,
+        notify: bool,
+        record_log: bool = True,
+    ) -> None:
+        task = asyncio.create_task(
+            self.process_search(search, notify=notify, record_log=record_log),
+            name=f"search-seed-{search.id}",
+        )
+        self._background_tasks.add(task)
+
+        def finished(done: asyncio.Task) -> None:
+            self._background_tasks.discard(done)
+            if done.cancelled():
+                return
+            try:
+                done.result()
+            except Exception:
+                logger.exception("Background search #%s failed", search.id)
+
+        task.add_done_callback(finished)
 
     async def _run(self) -> None:
         logger.info("Poller started, interval=%ss", self.interval_sec)
@@ -71,11 +111,13 @@ class PollerService:
     async def poll_once(self) -> None:
         searches = await self.db.list_active_searches_for_polling()
         # В логе только снимок текущего цикла опроса
-        cleared_users: set[int] = set()
-        for search in searches:
-            if search.telegram_id not in cleared_users:
-                await self.db.clear_poll_logs(search.telegram_id)
-                cleared_users.add(search.telegram_id)
+        user_ids = {search.telegram_id for search in searches}
+        await asyncio.gather(*(self.db.clear_poll_logs(user_id) for user_id in user_ids))
+        await asyncio.gather(*(self._poll_search(search) for search in searches))
+
+    async def _poll_search(self, search: Search) -> None:
+        semaphore = self._source_semaphores[search.source]
+        async with semaphore:
             try:
                 await self.process_search(search, notify=True)
             except Exception as exc:
@@ -91,7 +133,6 @@ class PollerService:
                     )
                 except Exception:
                     logger.exception("Failed to write poll log for search #%s", search.id)
-            await asyncio.sleep(1)
 
     async def process_search(
         self,
@@ -149,7 +190,8 @@ class PollerService:
                     await self._notify_etsy_captcha(search.telegram_id)
                 return 0
         finally:
-            await provider.aclose()
+            if search.source not in {Source.EBAY_PARSER, Source.POSHMARK}:
+                await provider.aclose()
 
         found = len(listings)
         if not listings:
@@ -272,4 +314,10 @@ class PollerService:
                 user,
                 proxy=self.proxy or None,
             )
+        if search.source in {Source.EBAY_PARSER, Source.POSHMARK}:
+            provider = self._public_providers.get(search.source)
+            if provider is None:
+                provider = get_provider(search.source, proxy=self.proxy or None)
+                self._public_providers[search.source] = provider
+            return provider
         return get_provider(search.source, proxy=self.proxy or None)

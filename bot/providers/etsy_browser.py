@@ -13,6 +13,9 @@ _navigation_lock = asyncio.Lock()
 _playwright: Any = None
 _context: Any = None
 _page: Any = None
+_context_proxy: str | None = None
+_html_cache: dict[str, tuple[float, str]] = {}
+HTML_CACHE_TTL_SEC = 60
 
 
 def _headless() -> bool:
@@ -24,10 +27,22 @@ def _headless() -> bool:
 
 
 async def _get_context(*, proxy: str | None = None):
-    global _playwright, _context, _page
+    global _playwright, _context, _page, _context_proxy
     async with _lock:
         if _context is not None:
-            return _context
+            browser = _context.browser
+            if (
+                browser is not None
+                and browser.is_connected()
+                and _context_proxy == proxy
+            ):
+                return _context
+            try:
+                await _context.close()
+            except Exception:
+                logger.debug("Stale Etsy browser close failed", exc_info=True)
+            _context = None
+            _page = None
         from playwright.async_api import async_playwright
 
         if _playwright is None:
@@ -55,6 +70,7 @@ async def _get_context(*, proxy: str | None = None):
             str(profile_dir),
             **launch_kwargs,
         )
+        _context_proxy = proxy
         await _context.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
         )
@@ -70,26 +86,37 @@ async def _get_context(*, proxy: str | None = None):
 async def fetch_search_html(url: str, *, proxy: str | None = None) -> str:
     """Открывает Etsy в постоянном профиле и возвращает HTML."""
     global _page
+    now = asyncio.get_running_loop().time()
+    cached = _html_cache.get(url)
+    if cached and cached[0] > now:
+        return cached[1]
     context = await _get_context(proxy=proxy)
     async with _navigation_lock:
+        cached = _html_cache.get(url)
+        if cached and cached[0] > asyncio.get_running_loop().time():
+            return cached[1]
         if _page is None or _page.is_closed():
             _page = await context.new_page()
         page = _page
         await page.goto(url, wait_until="domcontentloaded", timeout=90_000)
-        deadline = asyncio.get_running_loop().time() + 40
+        try:
+            await page.wait_for_selector('a[href*="/listing/"]', timeout=40_000)
+        except Exception:
+            # CAPTCHA/пустая выдача обрабатываются вызывающим кодом по HTML.
+            pass
         html = await page.content()
-        while asyncio.get_running_loop().time() < deadline:
-            if "/listing/" in html:
-                break
-            await page.wait_for_timeout(1500)
-            html = await page.content()
         if any("captcha-delivery.com" in frame.url for frame in page.frames):
             html += "\n<!-- DATADOME_CHALLENGE -->"
+        elif "/listing/" in html:
+            _html_cache[url] = (
+                asyncio.get_running_loop().time() + HTML_CACHE_TTL_SEC,
+                html,
+            )
         return html
 
 
 async def close_browser() -> None:
-    global _playwright, _context, _page
+    global _playwright, _context, _page, _context_proxy
     async with _lock:
         if _context is not None:
             try:
@@ -98,6 +125,7 @@ async def close_browser() -> None:
                 logger.debug("Playwright browser close failed", exc_info=True)
             _context = None
             _page = None
+            _context_proxy = None
         if _playwright is not None:
             try:
                 await _playwright.stop()

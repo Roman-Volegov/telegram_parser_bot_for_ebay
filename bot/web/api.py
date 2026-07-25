@@ -222,8 +222,7 @@ def create_api_router(
             marketplace=marketplace,
         )
         if poller is not None:
-            # Не пишем в лог опросов — там только снимок последнего цикла poller'а
-            await poller.process_search(search, notify=False, record_log=False)
+            poller.schedule_search(search, notify=False, record_log=False)
             try:
                 market_bit = (
                     f" · {EBAY_MARKETPLACE_LABELS.get(search.marketplace, search.marketplace)}"

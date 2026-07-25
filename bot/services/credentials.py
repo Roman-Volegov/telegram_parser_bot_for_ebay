@@ -24,6 +24,8 @@ class CredentialsService:
     def __init__(self, db: Database, crypto: CredentialsCrypto) -> None:
         self.db = db
         self.crypto = crypto
+        self._ebay_cache: dict[int, tuple[str, str]] = {}
+        self._etsy_cache: dict[int, str] = {}
 
     async def save_ebay_keys(
         self, telegram_id: int, client_id: str, client_secret: str
@@ -31,14 +33,19 @@ class CredentialsService:
         enc_id = self.crypto.encrypt(client_id.strip(), telegram_id)
         enc_secret = self.crypto.encrypt(client_secret.strip(), telegram_id)
         await self.db.save_credentials(telegram_id, enc_id, enc_secret)
+        self._ebay_cache[telegram_id] = (client_id.strip(), client_secret.strip())
 
     async def get_ebay_keys(self, telegram_id: int) -> tuple[str, str] | None:
+        cached = self._ebay_cache.get(telegram_id)
+        if cached is not None:
+            return cached
         enc = await self.db.get_credentials_enc(telegram_id)
         if enc is None:
             return None
         client_id = self.crypto.decrypt(enc[0], telegram_id)
         client_secret = self.crypto.decrypt(enc[1], telegram_id)
-        return client_id, client_secret
+        self._ebay_cache[telegram_id] = (client_id, client_secret)
+        return self._ebay_cache[telegram_id]
 
     async def save_etsy_key(
         self,
@@ -54,18 +61,27 @@ class CredentialsService:
             )
         enc = self.crypto.encrypt(api_key, telegram_id)
         await self.db.save_etsy_credentials(telegram_id, enc)
+        self._etsy_cache[telegram_id] = api_key
 
     async def get_etsy_key(self, telegram_id: int) -> str | None:
+        cached = self._etsy_cache.get(telegram_id)
+        if cached is not None:
+            return cached
         enc = await self.db.get_etsy_credentials_enc(telegram_id)
         if enc is None:
             return None
-        return self.crypto.decrypt(enc, telegram_id)
+        self._etsy_cache[telegram_id] = self.crypto.decrypt(enc, telegram_id)
+        return self._etsy_cache[telegram_id]
 
     async def revoke(self, telegram_id: int) -> bool:
-        return await self.db.revoke_credentials(telegram_id)
+        revoked = await self.db.revoke_credentials(telegram_id)
+        self._ebay_cache.pop(telegram_id, None)
+        return revoked
 
     async def revoke_etsy(self, telegram_id: int) -> bool:
-        return await self.db.revoke_etsy_credentials(telegram_id)
+        revoked = await self.db.revoke_etsy_credentials(telegram_id)
+        self._etsy_cache.pop(telegram_id, None)
+        return revoked
 
     async def build_ebay_api_provider(
         self,

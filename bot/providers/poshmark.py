@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
+from dataclasses import replace
 from urllib.parse import quote_plus
 
 from bs4 import BeautifulSoup
@@ -18,6 +20,8 @@ from bot.providers.http_utils import (
 from bot.providers.listing_meta import parse_shipping_info
 
 logger = logging.getLogger(__name__)
+SHIPPING_CACHE_TTL_SEC = 24 * 60 * 60
+_SHIPPING_CACHE: dict[str, tuple[float, float | None, str | None, bool]] = {}
 
 
 class PoshmarkProvider(BaseProvider):
@@ -30,6 +34,11 @@ class PoshmarkProvider(BaseProvider):
         await self._client.aclose()
 
     async def search(self, search: Search, *, limit: int = 20) -> list[Listing]:
+        if len(_SHIPPING_CACHE) > 2000:
+            now = time.monotonic()
+            expired = [key for key, value in _SHIPPING_CACHE.items() if value[0] <= now]
+            for key in expired:
+                _SHIPPING_CACHE.pop(key, None)
         query = search.keywords.strip()
         if not query:
             return []
@@ -107,6 +116,15 @@ class PoshmarkProvider(BaseProvider):
     async def _enrich_shipping(self, listing: Listing) -> Listing:
         if listing.shipping_free or listing.shipping_cost is not None:
             return listing
+        cached = _SHIPPING_CACHE.get(listing.id)
+        if cached and cached[0] > time.monotonic():
+            _, cost, currency, is_free = cached
+            return replace(
+                listing,
+                shipping_cost=cost,
+                shipping_currency=currency or listing.shipping_currency or listing.currency,
+                shipping_free=is_free,
+            )
         try:
             response = await self._client.get(
                 listing.item_url,
@@ -115,21 +133,19 @@ class PoshmarkProvider(BaseProvider):
             if response.status_code >= 400:
                 return listing
             cost, currency, is_free = _extract_shipping_from_detail(response.text)
+            _SHIPPING_CACHE[listing.id] = (
+                time.monotonic() + SHIPPING_CACHE_TTL_SEC,
+                cost,
+                currency,
+                is_free,
+            )
             if not is_free and cost is None:
                 return listing
-            return Listing(
-                id=listing.id,
-                title=listing.title,
-                description=listing.description,
-                price=listing.price,
-                currency=listing.currency,
-                image_url=listing.image_url,
-                item_url=listing.item_url,
-                source=listing.source,
+            return replace(
+                listing,
                 shipping_cost=cost,
                 shipping_currency=currency or listing.shipping_currency or listing.currency,
                 shipping_free=is_free,
-                listing_type=listing.listing_type,
             )
         except Exception as exc:
             logger.debug("Poshmark shipping enrich failed for %s: %s", listing.id, exc)

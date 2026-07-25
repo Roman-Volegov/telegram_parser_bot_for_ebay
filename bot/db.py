@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS searches (
     telegram_id INTEGER NOT NULL,
     source TEXT NOT NULL,
     keywords TEXT NOT NULL,
+    keywords_normalized TEXT NOT NULL DEFAULT '',
     max_price REAL,
     min_price REAL,
     condition TEXT,
@@ -109,6 +110,48 @@ class Database:
             await self.conn.execute(
                 "ALTER TABLE credentials ADD COLUMN etsy_api_key_enc TEXT"
             )
+        cursor = await self.conn.execute("PRAGMA table_info(searches)")
+        search_cols = {row[1] for row in await cursor.fetchall()}
+        if "keywords_normalized" not in search_cols:
+            await self.conn.execute(
+                "ALTER TABLE searches ADD COLUMN keywords_normalized TEXT NOT NULL DEFAULT ''"
+            )
+        cursor = await self.conn.execute(
+            "SELECT id, keywords FROM searches WHERE keywords_normalized = ''"
+        )
+        rows = await cursor.fetchall()
+        if rows:
+            await self.conn.executemany(
+                "UPDATE searches SET keywords_normalized = ? WHERE id = ?",
+                [
+                    (self._normalize_keywords(row["keywords"]), row["id"])
+                    for row in rows
+                ],
+            )
+        await self.conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_searches_duplicate
+            ON searches(telegram_id, source, keywords_normalized)
+            """
+        )
+        await self.conn.execute(
+            """
+            DELETE FROM poll_logs
+            WHERE search_id IS NOT NULL
+              AND id NOT IN (
+                  SELECT MAX(id) FROM poll_logs
+                  WHERE search_id IS NOT NULL
+                  GROUP BY telegram_id, search_id
+              )
+            """
+        )
+        await self.conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_poll_logs_search
+            ON poll_logs(telegram_id, search_id)
+            WHERE search_id IS NOT NULL
+            """
+        )
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -372,14 +415,6 @@ class Database:
     def _normalize_keywords(keywords: str) -> str:
         return " ".join((keywords or "").strip().split()).casefold()
 
-    @staticmethod
-    def _same_optional_float(left: float | None, right: float | None) -> bool:
-        if left is None and right is None:
-            return True
-        if left is None or right is None:
-            return False
-        return float(left) == float(right)
-
     async def find_identical_search(
         self,
         telegram_id: int,
@@ -396,20 +431,32 @@ class Database:
         needle_kw = self._normalize_keywords(keywords)
         needle_condition = (condition or "").strip() or None
         needle_market = marketplace if source not in {Source.POSHMARK, Source.ETSY} else None
-        for existing in await self.list_searches(telegram_id):
-            if existing.source is not source:
-                continue
-            if self._normalize_keywords(existing.keywords) != needle_kw:
-                continue
-            if not self._same_optional_float(existing.min_price, min_price):
-                continue
-            if not self._same_optional_float(existing.max_price, max_price):
-                continue
-            existing_condition = (existing.condition or "").strip() or None
-            if existing_condition != needle_condition:
-                continue
-            if bool(existing.buy_it_now) != bool(buy_it_now):
-                continue
+        cursor = await self.conn.execute(
+            """
+            SELECT * FROM searches
+            WHERE telegram_id = ?
+              AND source = ?
+              AND keywords_normalized = ?
+              AND (min_price = ? OR (min_price IS NULL AND ? IS NULL))
+              AND (max_price = ? OR (max_price IS NULL AND ? IS NULL))
+              AND COALESCE(NULLIF(TRIM(condition), ''), '') = ?
+              AND buy_it_now = ?
+            ORDER BY id DESC
+            """,
+            (
+                telegram_id,
+                source.value,
+                needle_kw,
+                min_price,
+                min_price,
+                max_price,
+                max_price,
+                needle_condition or "",
+                1 if buy_it_now else 0,
+            ),
+        )
+        for row in await cursor.fetchall():
+            existing = self._row_to_search(row)
             if existing.marketplace != needle_market:
                 continue
             return existing
@@ -437,14 +484,15 @@ class Database:
         cursor = await self.conn.execute(
             """
             INSERT INTO searches (
-                telegram_id, source, keywords, max_price, min_price,
+                telegram_id, source, keywords, keywords_normalized, max_price, min_price,
                 condition, buy_it_now, paused, filters_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
             """,
             (
                 telegram_id,
                 source.value,
                 keywords.strip(),
+                self._normalize_keywords(keywords),
                 max_price,
                 min_price,
                 condition,
@@ -521,12 +569,13 @@ class Database:
         await self.conn.execute(
             """
             UPDATE searches
-            SET keywords = ?, max_price = ?, min_price = ?, condition = ?,
+            SET keywords = ?, keywords_normalized = ?, max_price = ?, min_price = ?, condition = ?,
                 buy_it_now = ?, updated_at = ?
             WHERE id = ? AND telegram_id = ?
             """,
             (
                 new_keywords,
+                self._normalize_keywords(new_keywords),
                 new_max,
                 new_min,
                 new_condition,
@@ -654,6 +703,16 @@ class Database:
                 telegram_id, search_id, source, keywords, status,
                 found, new_items, notified, message, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(telegram_id, search_id) WHERE search_id IS NOT NULL
+            DO UPDATE SET
+                source = excluded.source,
+                keywords = excluded.keywords,
+                status = excluded.status,
+                found = excluded.found,
+                new_items = excluded.new_items,
+                notified = excluded.notified,
+                message = excluded.message,
+                created_at = excluded.created_at
             """,
             (
                 telegram_id,

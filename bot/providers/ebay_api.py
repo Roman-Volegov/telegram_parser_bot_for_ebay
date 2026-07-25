@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -71,12 +72,14 @@ class EbayApiProvider(BaseProvider):
         try:
             token = await self._get_token()
             items = await self._search_summaries(token, search, limit=limit)
-            listings: list[Listing] = []
-            for item in items:
-                listing = await self._to_listing(token, item)
-                if listing is not None:
-                    listings.append(listing)
-            return listings
+            semaphore = asyncio.Semaphore(6)
+
+            async def convert(item: dict) -> Listing | None:
+                async with semaphore:
+                    return await self._to_listing(token, item)
+
+            converted = await asyncio.gather(*(convert(item) for item in items))
+            return [listing for listing in converted if listing is not None]
         except httpx.HTTPError as exc:
             raise ProviderError(f"eBay API request failed: {exc}") from exc
 

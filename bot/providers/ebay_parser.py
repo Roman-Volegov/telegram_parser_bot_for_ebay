@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from urllib.parse import urlencode
@@ -25,7 +26,8 @@ class EbayParserProvider(BaseProvider):
 
     def __init__(self, *, proxy: str | None = None) -> None:
         self._client = build_client(proxy)
-        self._warmed = False
+        self._warmed_hosts: set[str] = set()
+        self._warmup_lock = asyncio.Lock()
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -51,17 +53,20 @@ class EbayParserProvider(BaseProvider):
         return params
 
     async def _warmup(self, host: str = "www.ebay.com") -> None:
-        if self._warmed:
+        if host in self._warmed_hosts:
             return
-        try:
-            response = await self._client.get(
-                f"https://{host}/",
-                headers={"Referer": "https://www.google.com/"},
-            )
-            if response.status_code < 400:
-                self._warmed = True
-        except Exception as exc:
-            logger.debug("eBay warmup failed: %s", exc)
+        async with self._warmup_lock:
+            if host in self._warmed_hosts:
+                return
+            try:
+                response = await self._client.get(
+                    f"https://{host}/",
+                    headers={"Referer": "https://www.google.com/"},
+                )
+                if response.status_code < 400:
+                    self._warmed_hosts.add(host)
+            except Exception as exc:
+                logger.debug("eBay warmup failed: %s", exc)
 
     async def search(self, search: Search, *, limit: int = 20) -> list[Listing]:
         try:
