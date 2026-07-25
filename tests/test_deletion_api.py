@@ -9,6 +9,7 @@ from cryptography.fernet import Fernet
 from bot.crypto import CredentialsCrypto
 from bot.db import Database
 from bot.services.credentials import CredentialsService
+from bot.services.etsy_access import ETSY_VNC_COOKIE, EtsyVncAccess
 from bot.web.app import create_app
 
 
@@ -22,11 +23,13 @@ class DeletionApiTests(unittest.IsolatedAsyncioTestCase):
         credentials = CredentialsService(
             self.db, CredentialsCrypto(Fernet.generate_key().decode())
         )
+        self.etsy_access = EtsyVncAccess("https://example.com", "a" * 32)
         self.app = create_app(
             self.db,
             "https://example.com",
             bot_token="123:test",
             credentials=credentials,
+            etsy_vnc_access=self.etsy_access,
         )
         self.client = TestClient(self.app)
 
@@ -52,6 +55,22 @@ class DeletionApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_health(self):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
+
+    async def test_etsy_access_ticket_is_single_use(self):
+        ticket_url = self.etsy_access.create_ticket_url()
+        response = self.client.get(ticket_url, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertNotIn("password=", response.headers["location"])
+        ticket = response.cookies.get(ETSY_VNC_COOKIE)
+        self.assertTrue(ticket)
+
+        auth = self.client.get(
+            "/internal/etsy-vnc-auth",
+            cookies={ETSY_VNC_COOKIE: ticket},
+        )
+        self.assertEqual(auth.status_code, 204)
+        reused = self.client.get(ticket_url, follow_redirects=False)
+        self.assertEqual(reused.status_code, 403)
 
 
 if __name__ == "__main__":

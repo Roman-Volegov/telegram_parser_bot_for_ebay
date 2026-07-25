@@ -21,8 +21,8 @@ services:
       WEB_PORT: 8080
       ETSY_BROWSER_HEADLESS: "false"
       ETSY_BROWSER_PROFILE_DIR: /app/data/etsy-browser-profile
-      ETSY_NOVNC_PASSWORD: ${ETSY_NOVNC_PASSWORD:-}
-      ETSY_NOVNC_TOKEN: ${ETSY_NOVNC_TOKEN:-}
+      ETSY_NOVNC_TOKEN: ${ETSY_NOVNC_TOKEN:?Set ETSY_NOVNC_TOKEN in .env}
+      ETSY_NOVNC_TTL_SEC: ${ETSY_NOVNC_TTL_SEC:-600}
     # прямой доступ оставляем на 18080 (HTTP) для отладки/health
     ports:
       - "18080:8080"
@@ -40,7 +40,7 @@ services:
       - "8443:443"
     environment:
       MINIAPP_DOMAIN: ${MINIAPP_DOMAIN:-78.17.135.134.sslip.io}
-      ETSY_NOVNC_TOKEN: ${ETSY_NOVNC_TOKEN:-disabled}
+      ETSY_NOVNC_TOKEN: ${ETSY_NOVNC_TOKEN:?Set ETSY_NOVNC_TOKEN in .env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

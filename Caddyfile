@@ -3,6 +3,9 @@
 	encode gzip
 
 	handle_path /{$ETSY_NOVNC_TOKEN}/* {
+		forward_auth bot:8080 {
+			uri /internal/etsy-vnc-auth
+		}
 		reverse_proxy bot:6080
 	}
 

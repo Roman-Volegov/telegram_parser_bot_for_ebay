@@ -13,6 +13,7 @@ from bot.models import Search, Source, User
 from bot.providers import ProviderError, get_provider
 from bot.providers.base import BaseProvider
 from bot.services.credentials import CredentialsService
+from bot.services.etsy_access import EtsyVncAccess
 
 logger = logging.getLogger(__name__)
 ETSY_CAPTCHA_NOTIFICATION_COOLDOWN_SEC = 3600
@@ -27,17 +28,19 @@ class PollerService:
         *,
         interval_sec: int,
         proxy: str | None = None,
-        etsy_novnc_url: str | None = None,
+        etsy_vnc_access: EtsyVncAccess | None = None,
+        etsy_captcha_notify_ids: set[int] | None = None,
     ) -> None:
         self.bot = bot
         self.db = db
         self.credentials = credentials
         self.interval_sec = interval_sec
         self.proxy = proxy
-        self.etsy_novnc_url = etsy_novnc_url
+        self.etsy_vnc_access = etsy_vnc_access
+        self.etsy_captcha_notify_ids = etsy_captcha_notify_ids or set()
         self._task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
-        self._etsy_captcha_notified_at: dict[int, float] = {}
+        self._etsy_captcha_notified_at = 0.0
         self._search_locks: dict[int, asyncio.Lock] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self._public_providers: dict[Source, BaseProvider] = {}
@@ -186,8 +189,8 @@ class PollerService:
             except ProviderError as exc:
                 logger.warning("Provider error search #%s: %s", search.id, exc)
                 await write_log(status="error", message=str(exc)[:400])
-                if search.source is Source.ETSY and "DataDome" in str(exc):
-                    await self._notify_etsy_captcha(search.telegram_id)
+                if exc.code == "ETSY_CAPTCHA":
+                    await self._notify_etsy_captcha()
                 return 0
         finally:
             if search.source not in {Source.EBAY_PARSER, Source.POSHMARK}:
@@ -276,31 +279,37 @@ class PollerService:
         )
         return sent
 
-    async def _notify_etsy_captcha(self, telegram_id: int) -> None:
-        if not self.etsy_novnc_url:
+    async def _notify_etsy_captcha(self) -> None:
+        if not self.etsy_vnc_access or not self.etsy_captcha_notify_ids:
             return
         now = time.monotonic()
-        last_notified = self._etsy_captcha_notified_at.get(telegram_id, 0)
-        if now - last_notified < ETSY_CAPTCHA_NOTIFICATION_COOLDOWN_SEC:
+        if now - self._etsy_captcha_notified_at < ETSY_CAPTCHA_NOTIFICATION_COOLDOWN_SEC:
             return
-        try:
-            await self.bot.send_message(
-                telegram_id,
-                "Etsy запросил проверку. Откройте браузер и пройдите CAPTCHA:",
-                reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text="🔐 Пройти CAPTCHA Etsy",
-                                url=self.etsy_novnc_url,
-                            )
+        sent = False
+        for telegram_id in self.etsy_captcha_notify_ids:
+            try:
+                await self.bot.send_message(
+                    telegram_id,
+                    "Etsy запросил проверку. Ссылка действует ограниченное время:",
+                    reply_markup=InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text="🔐 Пройти CAPTCHA Etsy",
+                                    url=self.etsy_vnc_access.create_ticket_url(),
+                                )
+                            ]
                         ]
-                    ]
-                ),
-            )
-            self._etsy_captcha_notified_at[telegram_id] = now
-        except Exception:
-            logger.exception("Failed to send Etsy CAPTCHA link to user=%s", telegram_id)
+                    ),
+                )
+                sent = True
+            except Exception:
+                logger.exception(
+                    "Failed to send Etsy CAPTCHA link to admin=%s",
+                    telegram_id,
+                )
+        if sent:
+            self._etsy_captcha_notified_at = now
 
     async def _build_provider(self, user: User, search: Search) -> BaseProvider:
         if search.source is Source.EBAY_API:

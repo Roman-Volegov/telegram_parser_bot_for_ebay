@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from urllib.parse import quote, urlencode
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,12 +25,25 @@ class Settings(BaseSettings):
     web_port: int = Field(default=8080, alias="WEB_PORT")
     http_proxy: str = Field(default="", alias="HTTP_PROXY")
     etsy_novnc_token: str = Field(default="", alias="ETSY_NOVNC_TOKEN")
-    etsy_novnc_password: str = Field(default="", alias="ETSY_NOVNC_PASSWORD")
+    etsy_novnc_ttl_sec: int = Field(
+        default=600,
+        alias="ETSY_NOVNC_TTL_SEC",
+        ge=60,
+        le=1800,
+    )
 
     @field_validator("public_base_url")
     @classmethod
     def strip_trailing_slash(cls, value: str) -> str:
         return value.rstrip("/")
+
+    @field_validator("etsy_novnc_token")
+    @classmethod
+    def validate_novnc_token(cls, value: str) -> str:
+        value = value.strip()
+        if value and len(value) < 32:
+            raise ValueError("ETSY_NOVNC_TOKEN must contain at least 32 characters")
+        return value
 
     @property
     def admin_ids(self) -> set[int]:
@@ -42,24 +54,6 @@ class Settings(BaseSettings):
             for part in self.admin_telegram_ids.split(",")
             if part.strip()
         }
-
-    @property
-    def etsy_novnc_url(self) -> str:
-        token = self.etsy_novnc_token.strip()
-        password = self.etsy_novnc_password.strip()
-        if not token or not password:
-            return ""
-        safe_token = quote(token, safe="")
-        query = urlencode(
-            {
-                "autoconnect": "1",
-                "resize": "scale",
-                "path": f"{safe_token}/websockify",
-                "password": password,
-            }
-        )
-        return f"{self.public_base_url}/{safe_token}/vnc.html?{query}"
-
 
 @lru_cache
 def get_settings() -> Settings:

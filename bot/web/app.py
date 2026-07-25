@@ -8,9 +8,11 @@ from fastapi.staticfiles import StaticFiles
 
 from bot.db import Database
 from bot.services.credentials import CredentialsService
+from bot.services.etsy_access import EtsyVncAccess
 from bot.services.poller import PollerService
 from bot.web.api import create_api_router
 from bot.web.deletion import create_deletion_router
+from bot.web.etsy_access import create_etsy_access_router
 
 WEBAPP_DIR = Path(__file__).resolve().parents[2] / "webapp"
 
@@ -23,9 +25,12 @@ def create_app(
     credentials: CredentialsService,
     poller: PollerService | None = None,
     http_proxy: str = "",
+    etsy_vnc_access: EtsyVncAccess | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DecoParser web", docs_url=None, redoc_url=None)
     app.include_router(create_deletion_router(db, public_base_url))
+    if etsy_vnc_access is not None:
+        app.include_router(create_etsy_access_router(etsy_vnc_access))
     app.include_router(
         create_api_router(
             db,

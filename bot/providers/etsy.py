@@ -142,7 +142,8 @@ class EtsyProvider(BaseProvider):
         if _looks_like_datadome(html) and "/listing/" not in html:
             raise ProviderError(
                 "Etsy запрашивает проверку DataDome. Откройте noVNC, "
-                "пройдите CAPTCHA вручную и повторите поиск."
+                "пройдите CAPTCHA вручную и повторите поиск.",
+                code="ETSY_CAPTCHA",
             )
 
         listings = _parse_search_html(html, limit=limit)

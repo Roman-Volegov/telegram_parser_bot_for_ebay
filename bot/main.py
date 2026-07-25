@@ -18,12 +18,15 @@ from bot.menu import setup_bot_commands, webapp_url_from_base
 from bot.middlewares import AccessMiddleware, InjectMiddleware
 from bot.services.cleanup import CleanupService
 from bot.services.credentials import CredentialsService
+from bot.services.etsy_access import EtsyVncAccess
 from bot.services.poller import PollerService
 from bot.web.app import create_app
 
 
 async def main() -> None:
     settings = get_settings()
+    if not settings.admin_ids:
+        raise RuntimeError("ADMIN_TELEGRAM_IDS must contain at least one administrator")
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
@@ -36,6 +39,15 @@ async def main() -> None:
 
     crypto = CredentialsCrypto(settings.credentials_encryption_key)
     credentials = CredentialsService(db, crypto)
+    etsy_vnc_access = (
+        EtsyVncAccess(
+            settings.public_base_url,
+            settings.etsy_novnc_token,
+            ttl_sec=settings.etsy_novnc_ttl_sec,
+        )
+        if settings.etsy_novnc_token
+        else None
+    )
 
     bot = Bot(
         token=settings.telegram_bot_token,
@@ -48,7 +60,8 @@ async def main() -> None:
         credentials,
         interval_sec=settings.poll_interval_sec,
         proxy=settings.http_proxy or None,
-        etsy_novnc_url=settings.etsy_novnc_url or None,
+        etsy_vnc_access=etsy_vnc_access,
+        etsy_captcha_notify_ids=settings.admin_ids,
     )
     cleanup = CleanupService(db, ttl_days=settings.seen_items_ttl_days)
 
@@ -68,6 +81,7 @@ async def main() -> None:
         credentials=credentials,
         poller=poller,
         http_proxy=settings.http_proxy,
+        etsy_vnc_access=etsy_vnc_access,
     )
     config = uvicorn.Config(
         app,
