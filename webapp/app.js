@@ -204,8 +204,8 @@
       : "Ключи ещё не заданы — заполните Client ID и Secret.";
 
     els.etsyKeysStatus.textContent = state.me.has_etsy_keys
-      ? "Ключ сохранён (зашифрован). Можно оставить поля пустыми — текущий ключ сохранится."
-      : "Ключ ещё не задан — заполните Keystring и Shared Secret.";
+      ? "Open API ключ сохранён (зашифрован). Пустые поля — оставить текущий."
+      : "Ключ не задан — используется Playwright.";
 
     if (state.me.deletion_url && state.me.deletion_token) {
       els.deletionBox.classList.remove("hidden");

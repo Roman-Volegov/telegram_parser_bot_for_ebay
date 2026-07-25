@@ -114,10 +114,9 @@ def create_api_router(
                 "Scope: https://api.ebay.com/oauth/api_scope",
             ],
             "etsy_checklist": [
-                "Зайдите на https://www.etsy.com/developers/your-apps",
-                "Создайте приложение (Open API v3)",
-                "Скопируйте Keystring и Shared Secret",
-                "Ключ хранится на сервере в зашифрованном виде",
+                "Etsy работает через Playwright — API-ключ не обязателен",
+                "При желании можно сохранить Open API ключ (быстрее)",
+                "developers.etsy.com → Keystring и Shared Secret",
             ],
         }
 
@@ -312,8 +311,6 @@ def create_api_router(
 
         etsy_keystring = (payload.etsy_keystring or "").strip()
         etsy_secret = (payload.etsy_shared_secret or "").strip()
-        wants_etsy = Source.ETSY in payload.enabled_sources
-        has_etsy_keys = await db.has_etsy_credentials(user.telegram_id)
         etsy_api_key = normalize_etsy_api_key(etsy_keystring, etsy_secret)
         etsy_verified = False
 
@@ -345,37 +342,27 @@ def create_api_router(
                     detail="Для eBay API укажите Client ID и Client Secret",
                 )
 
-        if wants_etsy:
-            if etsy_api_key:
-                provider = EtsyProvider(
-                    proxy=http_proxy or None,
-                    api_key=etsy_api_key,
-                )
-                try:
-                    await provider.verify_credentials()
-                except Exception as exc:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Etsy API ключ не принят: {exc}",
-                    ) from exc
-                finally:
-                    await provider.aclose()
-                try:
-                    await credentials.save_etsy_key(
-                        user.telegram_id, etsy_keystring, etsy_secret
-                    )
-                except ValueError as exc:
-                    raise HTTPException(status_code=400, detail=str(exc)) from exc
-                has_etsy_keys = True
-                etsy_verified = True
-            elif not has_etsy_keys:
+        if wants_etsy and etsy_api_key:
+            provider = EtsyProvider(
+                proxy=http_proxy or None,
+                api_key=etsy_api_key,
+            )
+            try:
+                await provider.verify_credentials()
+            except Exception as exc:
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        "Для Etsy укажите Keystring и Shared Secret "
-                        "(developers.etsy.com)"
-                    ),
+                    detail=f"Etsy API ключ не принят: {exc}",
+                ) from exc
+            finally:
+                await provider.aclose()
+            try:
+                await credentials.save_etsy_key(
+                    user.telegram_id, etsy_keystring, etsy_secret
                 )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            etsy_verified = True
 
         await db.save_setup(
             user.telegram_id,

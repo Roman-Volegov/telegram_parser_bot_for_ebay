@@ -97,6 +97,12 @@ async def main() -> None:
     finally:
         await poller.stop()
         await cleanup.stop()
+        try:
+            from bot.providers.etsy_browser import close_browser
+
+            await close_browser()
+        except Exception:
+            logger.debug("Etsy browser shutdown skipped", exc_info=True)
         await db.close()
         await bot.session.close()
 

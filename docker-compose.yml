@@ -10,6 +10,8 @@ services:
       - .env
     volumes:
       - ebay_bot_data:/app/data
+    # Chromium (Playwright) нужен shared memory
+    shm_size: "512mb"
     expose:
       - "8080"
     environment:

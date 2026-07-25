@@ -92,9 +92,8 @@ class CredentialsService:
         *,
         proxy: str | None = None,
     ) -> EtsyProvider:
+        # Ключ опционален: без него используется Playwright
         api_key = await self.get_etsy_key(user.telegram_id)
-        if not api_key:
-            raise ValueError("Etsy API ключ не сохранён")
         return EtsyProvider(proxy=proxy, api_key=api_key)
 
     async def keys_status_text(self, telegram_id: int) -> str:
@@ -108,6 +107,6 @@ class CredentialsService:
         etsy_bit = (
             "🔑 Etsy API ключ: сохранён (зашифрован)"
             if has_etsy
-            else "🔑 Etsy API ключ: не задан"
+            else "🔑 Etsy: Playwright (ключ не нужен)"
         )
         return f"{ebay_bit}\n{etsy_bit}"
