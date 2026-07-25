@@ -60,9 +60,18 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         )
         await self.db.mark_seen(search.id, ["new"])
         await self.db.conn.commit()
+        self.assertTrue(await self.db.has_seen(search.id))
+        self.assertEqual(await self.db.cleanup_seen_items(90), 0)
+        self.assertEqual(await self.db.filter_new_ids(search.id, ["old", "new"]), [])
+        await self.db.set_search_paused(search.id, 2, True)
         deleted = await self.db.cleanup_seen_items(90)
         self.assertEqual(deleted, 1)
         self.assertEqual(await self.db.filter_new_ids(search.id, ["old", "new"]), ["old"])
+
+    async def test_database_uses_wal(self):
+        cursor = await self.db.conn.execute("PRAGMA journal_mode")
+        row = await cursor.fetchone()
+        self.assertEqual(row[0], "wal")
 
     async def test_credentials_and_deletion_token(self):
         await self.db.upsert_pending_user(3, None, "B")

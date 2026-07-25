@@ -94,6 +94,9 @@ class Database:
         self._conn = await aiosqlite.connect(self.path)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA foreign_keys = ON")
+        await self._conn.execute("PRAGMA journal_mode = WAL")
+        await self._conn.execute("PRAGMA synchronous = NORMAL")
+        await self._conn.execute("PRAGMA busy_timeout = 5000")
         await self._conn.executescript(SCHEMA)
         await self._migrate_schema()
         await self._conn.commit()
@@ -596,12 +599,27 @@ class Database:
         row = await cursor.fetchone()
         return int(row["c"]) if row else 0
 
+    async def has_seen(self, search_id: int) -> bool:
+        cursor = await self.conn.execute(
+            "SELECT 1 FROM seen_items WHERE search_id = ? LIMIT 1",
+            (search_id,),
+        )
+        return await cursor.fetchone() is not None
+
     async def cleanup_seen_items(self, ttl_days: int) -> int:
         cutoff = (
             datetime.now(timezone.utc) - timedelta(days=ttl_days)
         ).replace(microsecond=0).isoformat()
         cursor = await self.conn.execute(
-            "DELETE FROM seen_items WHERE first_seen_at < ?",
+            """
+            DELETE FROM seen_items
+            WHERE first_seen_at < ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM searches
+                  WHERE searches.id = seen_items.search_id
+                    AND searches.paused = 0
+              )
+            """,
             (cutoff,),
         )
         await self.conn.commit()

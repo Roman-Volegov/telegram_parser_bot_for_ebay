@@ -38,6 +38,7 @@ class PollerService:
         self._task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
         self._etsy_captcha_notified_at: dict[int, float] = {}
+        self._search_locks: dict[int, asyncio.Lock] = {}
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -102,6 +103,21 @@ class PollerService:
         """Обрабатывает поиск. Возвращает число новых уведомлений.
         Если seen пуст — тихий seed без notify.
         """
+        lock = self._search_locks.setdefault(search.id, asyncio.Lock())
+        async with lock:
+            return await self._process_search_locked(
+                search,
+                notify=notify,
+                record_log=record_log,
+            )
+
+    async def _process_search_locked(
+        self,
+        search: Search,
+        *,
+        notify: bool,
+        record_log: bool,
+    ) -> int:
         user = await self.db.get_user(search.telegram_id)
         if user is None:
             return 0
@@ -145,10 +161,10 @@ class PollerService:
             return 0
 
         item_ids = [item.id for item in listings]
-        seen_count = await self.db.count_seen(search.id)
+        has_seen = await self.db.has_seen(search.id)
         new_ids = await self.db.filter_new_ids(search.id, item_ids)
 
-        if seen_count == 0:
+        if not has_seen:
             await self.db.mark_seen(search.id, item_ids)
             logger.info(
                 "Seeded search #%s with %s items (%s)",
@@ -175,10 +191,10 @@ class PollerService:
 
         new_set = set(new_ids)
         new_listings = [item for item in listings if item.id in new_set]
-        await self.db.mark_seen(search.id, [item.id for item in new_listings])
         new_count = len(new_listings)
 
         if not notify:
+            await self.db.mark_seen(search.id, [item.id for item in new_listings])
             await write_log(
                 status="ok",
                 found=found,
@@ -192,6 +208,7 @@ class PollerService:
         for listing in new_listings[:8]:
             try:
                 await send_listing_card(self.bot, search.telegram_id, listing)
+                await self.db.mark_seen(search.id, [listing.id])
                 sent += 1
             except Exception:
                 logger.exception(
@@ -207,7 +224,13 @@ class PollerService:
             found=found,
             new_items=new_count,
             notified=sent,
-            message="Опрос завершён" if sent else "Новые найдены, уведомления не отправлены",
+            message=(
+                f"Опрос завершён, ещё ожидают отправки: {new_count - sent}"
+                if new_count > sent
+                else "Опрос завершён"
+            )
+            if sent
+            else "Новые найдены, уведомления не отправлены",
         )
         return sent
 
