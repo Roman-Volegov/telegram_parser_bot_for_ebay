@@ -54,10 +54,10 @@ cp .env.example .env
 sudo docker compose up -d --build
 ```
 
-- HTTP health: `18080`
+- HTTP health: `127.0.0.1:18080` (не публикуется наружу)
 - HTTPS Mini App (Caddy): `8443` → `/app/`
 - Public landing page (English): `https://<IP>.sslip.io:8443/`
-- Контейнеры: `ebay-poshmark-bot`, `ebay-poshmark-caddy`
+- Контейнеры: `ebay-poshmark-bot`, `ebay-poshmark-caddy`, `ebay-poshmark-redis`
 
 ### Ручная проверка Etsy DataDome
 
@@ -97,17 +97,26 @@ bot/
   config.py
   db.py / crypto.py / models.py
   handlers/         # start, admin, setup, searches
-  providers/        # ebay_api, ebay_parser, poshmark
-  services/         # poller, cleanup, credentials
-  web/              # eBay deletion endpoint
+  providers/        # ebay_api, ebay_parser, poshmark, etsy
+  services/         # poller, cleanup, credentials, Etsy access tickets
+  web/              # Mini App API, deletion endpoint, noVNC auth
+```
+
+## Проверка
+
+```bash
+pip install -r requirements-dev.txt
+ruff check --select E4,E7,E9,F bot tests
+pytest -q
+pip-audit -r requirements.txt
 ```
 
 ## Замечания
 
 - Секреты eBay шифруются Fernet; ciphertext привязан к `telegram_id` (AAD).
-- Сообщения с Client Secret удаляются из чата.
+- Client Secret вводится только в Mini App и не отправляется сообщением в чат.
 - Poshmark — HTML-парсер публичной выдачи (вёрстка может меняться).
-- Etsy — **Playwright (Chromium)** с постоянным профилем; первичная проверка
-  DataDome проходится вручную через защищённый SSH-туннелем noVNC.
+- Etsy — **Playwright (Chromium)** с постоянным профилем; CAPTCHA открывается
+  по одноразовой мобильной ссылке для администратора или через SSH-туннель.
   Опционально Open API v3 (`keystring:shared_secret`) в Mini App, шифруется как eBay.
 - Для Production eBay keyset укажите deletion URL и verification token из `/setup`.
