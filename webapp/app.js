@@ -4,8 +4,8 @@
     tg.ready();
     tg.expand();
     try {
-      tg.setHeaderColor("#1a1a1a");
-      tg.setBackgroundColor("#1a1a1a");
+      tg.setHeaderColor("#f7f5ef");
+      tg.setBackgroundColor("#f7f5ef");
     } catch (_) {
       // старые клиенты могут не принимать hex
     }
