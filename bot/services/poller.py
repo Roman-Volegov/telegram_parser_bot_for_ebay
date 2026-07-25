@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from aiogram import Bot
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.cards import send_listing_card
 from bot.db import Database
@@ -13,6 +15,7 @@ from bot.providers.base import BaseProvider
 from bot.services.credentials import CredentialsService
 
 logger = logging.getLogger(__name__)
+ETSY_CAPTCHA_NOTIFICATION_COOLDOWN_SEC = 3600
 
 
 class PollerService:
@@ -24,14 +27,17 @@ class PollerService:
         *,
         interval_sec: int,
         proxy: str | None = None,
+        etsy_novnc_url: str | None = None,
     ) -> None:
         self.bot = bot
         self.db = db
         self.credentials = credentials
         self.interval_sec = interval_sec
         self.proxy = proxy
+        self.etsy_novnc_url = etsy_novnc_url
         self._task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
+        self._etsy_captcha_notified_at: dict[int, float] = {}
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -123,6 +129,8 @@ class PollerService:
             except ProviderError as exc:
                 logger.warning("Provider error search #%s: %s", search.id, exc)
                 await write_log(status="error", message=str(exc)[:400])
+                if search.source is Source.ETSY and "DataDome" in str(exc):
+                    await self._notify_etsy_captcha(search.telegram_id)
                 return 0
         finally:
             await provider.aclose()
@@ -202,6 +210,32 @@ class PollerService:
             message="Опрос завершён" if sent else "Новые найдены, уведомления не отправлены",
         )
         return sent
+
+    async def _notify_etsy_captcha(self, telegram_id: int) -> None:
+        if not self.etsy_novnc_url:
+            return
+        now = time.monotonic()
+        last_notified = self._etsy_captcha_notified_at.get(telegram_id, 0)
+        if now - last_notified < ETSY_CAPTCHA_NOTIFICATION_COOLDOWN_SEC:
+            return
+        try:
+            await self.bot.send_message(
+                telegram_id,
+                "Etsy запросил проверку. Откройте браузер и пройдите CAPTCHA:",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="🔐 Пройти CAPTCHA Etsy",
+                                url=self.etsy_novnc_url,
+                            )
+                        ]
+                    ]
+                ),
+            )
+            self._etsy_captcha_notified_at[telegram_id] = now
+        except Exception:
+            logger.exception("Failed to send Etsy CAPTCHA link to user=%s", telegram_id)
 
     async def _build_provider(self, user: User, search: Search) -> BaseProvider:
         if search.source is Source.EBAY_API:

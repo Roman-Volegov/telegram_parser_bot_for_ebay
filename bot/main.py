@@ -48,6 +48,7 @@ async def main() -> None:
         credentials,
         interval_sec=settings.poll_interval_sec,
         proxy=settings.http_proxy or None,
+        etsy_novnc_url=settings.etsy_novnc_url or None,
     )
     cleanup = CleanupService(db, ttl_days=settings.seen_items_ttl_days)
 
