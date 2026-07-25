@@ -22,6 +22,7 @@ def test_etsy_access_uses_short_lived_ticket_without_password():
         PUBLIC_BASE_URL="https://example.com:8443/",
         ETSY_NOVNC_TOKEN="a" * 32,
     )
+    assert settings.etsy_novnc_ttl_sec == 43_200
     access = EtsyVncAccess(
         settings.public_base_url,
         settings.etsy_novnc_token,

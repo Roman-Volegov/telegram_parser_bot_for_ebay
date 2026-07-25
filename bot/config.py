@@ -27,10 +27,10 @@ class Settings(BaseSettings):
     http_proxy: str = Field(default="", alias="HTTP_PROXY")
     etsy_novnc_token: str = Field(default="", alias="ETSY_NOVNC_TOKEN")
     etsy_novnc_ttl_sec: int = Field(
-        default=600,
+        default=43_200,
         alias="ETSY_NOVNC_TTL_SEC",
         ge=60,
-        le=1800,
+        le=86_400,
     )
 
     @field_validator("public_base_url")
