@@ -19,7 +19,8 @@ RUN apt-get update \
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt \
-    && playwright install --with-deps --no-shell chromium
+    && playwright install --with-deps --no-shell chromium \
+    && rm -rf /var/lib/apt/lists/* /root/.cache /tmp/*
 
 COPY bot ./bot
 COPY webapp ./webapp

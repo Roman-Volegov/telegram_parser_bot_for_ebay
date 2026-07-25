@@ -2,7 +2,7 @@
 set -eu
 
 DISPLAY_NUMBER="${DISPLAY:-:99}"
-SCREEN_SIZE="${ETSY_SCREEN_SIZE:-1366x900x24}"
+SCREEN_SIZE="${ETSY_SCREEN_SIZE:-1368x900x24}"
 PROFILE_DIR="${ETSY_BROWSER_PROFILE_DIR:-/app/data/etsy-browser-profile}"
 
 rm -rf \
@@ -16,6 +16,7 @@ mkdir -p /app/data/vnc
 x11vnc \
     -display "$DISPLAY_NUMBER" \
     -nopw \
+    -quiet \
     -forever \
     -shared \
     -rfbport 5900 \

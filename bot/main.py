@@ -99,6 +99,7 @@ async def main() -> None:
         loop="asyncio",
         proxy_headers=True,
         forwarded_allow_ips="*",
+        access_log=False,
     )
     server = uvicorn.Server(config)
 
