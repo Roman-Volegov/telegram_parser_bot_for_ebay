@@ -8,38 +8,14 @@ logger = logging.getLogger(__name__)
 
 _lock = asyncio.Lock()
 _playwright: Any = None
-_pw_browser: Any = None
+_browser: Any = None
 
 
-async def _fetch_with_camoufox(url: str, *, proxy: str | None) -> str:
-    from camoufox.async_api import AsyncCamoufox
-
-    kwargs: dict[str, Any] = {
-        "headless": True,
-        "humanize": True,
-    }
-    if proxy:
-        kwargs["proxy"] = {"server": proxy}
-        kwargs["geoip"] = True
-
-    async with AsyncCamoufox(**kwargs) as browser:
-        page = await browser.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=90_000)
-        deadline = asyncio.get_running_loop().time() + 40
-        html = await page.content()
-        while asyncio.get_running_loop().time() < deadline:
-            if "/listing/" in html:
-                break
-            await page.wait_for_timeout(1500)
-            html = await page.content()
-        return html
-
-
-async def _get_playwright_browser(*, proxy: str | None = None):
-    global _playwright, _pw_browser
+async def _get_browser(*, proxy: str | None = None):
+    global _playwright, _browser
     async with _lock:
-        if _pw_browser is not None and _pw_browser.is_connected():
-            return _pw_browser
+        if _browser is not None and _browser.is_connected():
+            return _browser
         from playwright.async_api import async_playwright
 
         if _playwright is None:
@@ -56,15 +32,16 @@ async def _get_playwright_browser(*, proxy: str | None = None):
         }
         if proxy:
             launch_kwargs["proxy"] = {"server": proxy}
-        _pw_browser = await _playwright.chromium.launch(**launch_kwargs)
+        _browser = await _playwright.chromium.launch(**launch_kwargs)
         logger.info("Playwright Chromium started for Etsy")
-        return _pw_browser
+        return _browser
 
 
-async def _fetch_with_playwright(url: str, *, proxy: str | None) -> str:
+async def fetch_search_html(url: str, *, proxy: str | None = None) -> str:
+    """Открывает поиск Etsy в headless Chromium и возвращает HTML."""
     from bot.providers.http_utils import USER_AGENT
 
-    browser = await _get_playwright_browser(proxy=proxy)
+    browser = await _get_browser(proxy=proxy)
     context = await browser.new_context(
         user_agent=USER_AGENT,
         viewport={"width": 1366, "height": 900},
@@ -89,29 +66,15 @@ async def _fetch_with_playwright(url: str, *, proxy: str | None) -> str:
         await context.close()
 
 
-async def fetch_search_html(url: str, *, proxy: str | None = None) -> str:
-    """Camoufox first, then Playwright Chromium."""
-    try:
-        html = await _fetch_with_camoufox(url, proxy=proxy)
-        logger.info("Etsy fetched via Camoufox (%s bytes)", len(html))
-        return html
-    except Exception as exc:
-        logger.warning("Camoufox failed (%s), trying Playwright", exc)
-
-    html = await _fetch_with_playwright(url, proxy=proxy)
-    logger.info("Etsy fetched via Playwright (%s bytes)", len(html))
-    return html
-
-
 async def close_browser() -> None:
-    global _playwright, _pw_browser
+    global _playwright, _browser
     async with _lock:
-        if _pw_browser is not None:
+        if _browser is not None:
             try:
-                await _pw_browser.close()
+                await _browser.close()
             except Exception:
                 logger.debug("Playwright browser close failed", exc_info=True)
-            _pw_browser = None
+            _browser = None
         if _playwright is not None:
             try:
                 await _playwright.stop()
