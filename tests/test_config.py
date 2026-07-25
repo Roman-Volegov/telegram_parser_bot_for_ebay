@@ -26,6 +26,8 @@ def test_etsy_novnc_url_requires_token_and_password():
     settings = Settings(
         TELEGRAM_BOT_TOKEN="test-token",
         CREDENTIALS_ENCRYPTION_KEY="test-key",
+        ETSY_NOVNC_TOKEN="",
+        ETSY_NOVNC_PASSWORD="",
     )
 
     assert settings.etsy_novnc_url == ""
