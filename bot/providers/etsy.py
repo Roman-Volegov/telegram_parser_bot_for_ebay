@@ -247,7 +247,11 @@ def _api_error_detail(response: httpx.Response) -> str:
 
 def _looks_like_datadome(html: str) -> bool:
     low = (html or "").lower()
-    return "datadome" in low or "please enable js and disable any ad blocker" in low
+    return (
+        "datadome" in low
+        or "datadome_challenge" in low
+        or "please enable js and disable any ad blocker" in low
+    )
 
 
 def _parse_api_listings(payload: Any, *, limit: int) -> list[Listing]:

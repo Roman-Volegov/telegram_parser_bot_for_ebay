@@ -83,6 +83,8 @@ async def fetch_search_html(url: str, *, proxy: str | None = None) -> str:
                 break
             await page.wait_for_timeout(1500)
             html = await page.content()
+        if any("captcha-delivery.com" in frame.url for frame in page.frames):
+            html += "\n<!-- DATADOME_CHALLENGE -->"
         return html
 
 

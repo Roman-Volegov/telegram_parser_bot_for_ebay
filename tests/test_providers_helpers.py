@@ -5,6 +5,7 @@ from bot.providers.ebay_parser import _extract_ebay_item_id, _parse_html_listing
 from bot.providers.etsy import (
     _extract_etsy_listing_id,
     _extract_shipping_from_detail,
+    _looks_like_datadome,
     _parse_api_listings,
     _parse_search_html,
 )
@@ -30,6 +31,9 @@ class HelpersTests(unittest.TestCase):
             ),
             "1234567890",
         )
+
+    def test_etsy_datadome_marker(self):
+        self.assertTrue(_looks_like_datadome("<!-- DATADOME_CHALLENGE -->"))
 
     def test_etsy_parse_search_html(self):
         html = """
