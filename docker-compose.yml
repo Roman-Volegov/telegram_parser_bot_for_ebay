@@ -90,8 +90,10 @@ services:
     environment:
       MINIAPP_DOMAIN: ${MINIAPP_DOMAIN:?Set MINIAPP_DOMAIN in .env}
       ETSY_NOVNC_TOKEN: ${ETSY_NOVNC_TOKEN:?Set ETSY_NOVNC_TOKEN in .env}
+      XUI_ACME_HOST: ${XUI_ACME_HOST:?Set XUI_ACME_HOST in .env}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./acme-challenge:/srv/acme-challenge:ro
       - caddy_data:/data
       - caddy_config:/config
     logging:
