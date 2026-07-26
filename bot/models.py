@@ -116,6 +116,7 @@ class Search:
     telegram_id: int
     source: Source
     keywords: str
+    group_key: str = ""
     max_price: float | None = None
     min_price: float | None = None
     condition: str | None = None

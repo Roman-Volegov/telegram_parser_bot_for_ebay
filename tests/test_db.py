@@ -198,6 +198,49 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNotNone(posh_dup)
 
+    async def test_search_group_lifecycle(self):
+        await self.db.upsert_pending_user(7, None, "Group")
+        searches = await self.db.add_search_group(
+            7,
+            [Source.ETSY, Source.EBAY_PARSER],
+            "Vintage brooch",
+            min_price=10,
+            max_price=100,
+            buy_it_now=True,
+            marketplace="EBAY_US",
+        )
+        self.assertEqual(len(searches), 2)
+        self.assertEqual(len({item.group_key for item in searches}), 1)
+        etsy = next(item for item in searches if item.source is Source.ETSY)
+        self.assertFalse(etsy.buy_it_now)
+        self.assertIsNone(etsy.marketplace)
+        for item in searches:
+            await self.db.mark_seen(item.id, ["old"])
+
+        updated = await self.db.update_search_group(
+            searches[0].id,
+            7,
+            sources=[Source.EBAY_PARSER, Source.POSHMARK],
+            keywords="Vintage brooch signed",
+            max_price=120,
+            marketplace="EBAY_US",
+        )
+        self.assertEqual(
+            {item.source for item in updated},
+            {Source.EBAY_PARSER, Source.POSHMARK},
+        )
+        self.assertTrue(all(item.keywords == "Vintage brooch signed" for item in updated))
+        seen_flags = [await self.db.has_seen(item.id) for item in updated]
+        self.assertFalse(any(seen_flags))
+
+        self.assertTrue(
+            await self.db.set_search_group_paused(updated[0].id, 7, True)
+        )
+        paused = await self.db.get_search_group(updated[0].group_key, 7)
+        self.assertTrue(all(item.paused for item in paused))
+        self.assertTrue(await self.db.delete_search_group(updated[0].id, 7))
+        self.assertEqual(await self.db.get_search_group(updated[0].group_key, 7), [])
+
 
 if __name__ == "__main__":
     unittest.main()

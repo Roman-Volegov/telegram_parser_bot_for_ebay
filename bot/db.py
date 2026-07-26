@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS searches (
     source TEXT NOT NULL,
     keywords TEXT NOT NULL,
     keywords_normalized TEXT NOT NULL DEFAULT '',
+    group_key TEXT NOT NULL DEFAULT '',
     max_price REAL,
     min_price REAL,
     condition TEXT,
@@ -116,6 +117,13 @@ class Database:
             await self.conn.execute(
                 "ALTER TABLE searches ADD COLUMN keywords_normalized TEXT NOT NULL DEFAULT ''"
             )
+        if "group_key" not in search_cols:
+            await self.conn.execute(
+                "ALTER TABLE searches ADD COLUMN group_key TEXT NOT NULL DEFAULT ''"
+            )
+        await self.conn.execute(
+            "UPDATE searches SET group_key = 'legacy:' || id WHERE group_key = ''"
+        )
         cursor = await self.conn.execute(
             "SELECT id, keywords FROM searches WHERE keywords_normalized = ''"
         )
@@ -132,6 +140,12 @@ class Database:
             """
             CREATE INDEX IF NOT EXISTS idx_searches_duplicate
             ON searches(telegram_id, source, keywords_normalized)
+            """
+        )
+        await self.conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_searches_group
+            ON searches(telegram_id, group_key)
             """
         )
         await self.conn.execute(
@@ -426,6 +440,7 @@ class Database:
         condition: str | None = None,
         buy_it_now: bool = True,
         marketplace: str | None = None,
+        exclude_group_key: str | None = None,
     ) -> Search | None:
         """Ищет полностью идентичный поиск пользователя."""
         needle_kw = self._normalize_keywords(keywords)
@@ -457,6 +472,8 @@ class Database:
         )
         for row in await cursor.fetchall():
             existing = self._row_to_search(row)
+            if exclude_group_key and existing.group_key == exclude_group_key:
+                continue
             if existing.marketplace != needle_market:
                 continue
             return existing
@@ -474,40 +491,102 @@ class Database:
         buy_it_now: bool = True,
         filters_json: dict[str, Any] | None = None,
         marketplace: str | None = None,
+        group_key: str | None = None,
     ) -> Search:
+        searches = await self.add_search_group(
+            telegram_id,
+            [source],
+            keywords,
+            max_price=max_price,
+            min_price=min_price,
+            condition=condition,
+            buy_it_now=buy_it_now,
+            filters_json=filters_json,
+            marketplace=marketplace,
+            group_key=group_key,
+        )
+        return searches[0]
+
+    async def add_search_group(
+        self,
+        telegram_id: int,
+        sources: list[Source],
+        keywords: str,
+        *,
+        max_price: float | None = None,
+        min_price: float | None = None,
+        condition: str | None = None,
+        buy_it_now: bool = True,
+        filters_json: dict[str, Any] | None = None,
+        marketplace: str | None = None,
+        group_key: str | None = None,
+    ) -> list[Search]:
+        if not sources:
+            raise ValueError("At least one source is required")
+        unique_sources = list(dict.fromkeys(sources))
+        key = group_key or secrets.token_urlsafe(12)
         now = _utcnow()
-        filters = dict(filters_json or {})
-        if marketplace:
-            filters["marketplace"] = marketplace
-        elif source in {Source.POSHMARK, Source.ETSY}:
-            filters.pop("marketplace", None)
-        cursor = await self.conn.execute(
+        rows: list[tuple[Any, ...]] = []
+        for source in unique_sources:
+            filters = dict(filters_json or {})
+            source_buy_it_now = buy_it_now
+            if source in {Source.POSHMARK, Source.ETSY}:
+                filters.pop("marketplace", None)
+                source_buy_it_now = False
+            elif marketplace:
+                filters["marketplace"] = marketplace
+            rows.append(
+                (
+                    telegram_id,
+                    source.value,
+                    keywords.strip(),
+                    self._normalize_keywords(keywords),
+                    key,
+                    max_price,
+                    min_price,
+                    condition,
+                    1 if source_buy_it_now else 0,
+                    json.dumps(filters),
+                    now,
+                    now,
+                )
+            )
+        await self.conn.executemany(
             """
             INSERT INTO searches (
-                telegram_id, source, keywords, keywords_normalized, max_price, min_price,
+                telegram_id, source, keywords, keywords_normalized, group_key, max_price, min_price,
                 condition, buy_it_now, paused, filters_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
             """,
-            (
-                telegram_id,
-                source.value,
-                keywords.strip(),
-                self._normalize_keywords(keywords),
-                max_price,
-                min_price,
-                condition,
-                1 if buy_it_now else 0,
-                json.dumps(filters),
-                now,
-                now,
-            ),
+            rows,
         )
         await self.conn.commit()
-        search_id = cursor.lastrowid
-        assert search_id is not None
+        return await self.get_search_group(key, telegram_id)
+
+    async def get_search_group(
+        self,
+        group_key: str,
+        telegram_id: int,
+    ) -> list[Search]:
+        cursor = await self.conn.execute(
+            """
+            SELECT * FROM searches
+            WHERE group_key = ? AND telegram_id = ?
+            ORDER BY id ASC
+            """,
+            (group_key, telegram_id),
+        )
+        return [self._row_to_search(row) for row in await cursor.fetchall()]
+
+    async def get_search_group_by_id(
+        self,
+        search_id: int,
+        telegram_id: int,
+    ) -> list[Search]:
         search = await self.get_search(search_id)
-        assert search is not None
-        return search
+        if search is None or search.telegram_id != telegram_id:
+            return []
+        return await self.get_search_group(search.group_key, telegram_id)
 
     async def get_search(self, search_id: int) -> Search | None:
         cursor = await self.conn.execute(
@@ -603,6 +682,169 @@ class Database:
             )
         await self.conn.commit()
         return await self.get_search(search_id)
+
+    async def update_search_group(
+        self,
+        search_id: int,
+        telegram_id: int,
+        *,
+        sources: list[Source] | None = None,
+        keywords: str | None = None,
+        max_price: float | None = None,
+        min_price: float | None = None,
+        condition: str | None = None,
+        buy_it_now: bool | None = None,
+        clear_max_price: bool = False,
+        clear_min_price: bool = False,
+        marketplace: str | None = None,
+    ) -> list[Search]:
+        group = await self.get_search_group_by_id(search_id, telegram_id)
+        if not group:
+            return []
+        base = group[0]
+        target_sources = list(dict.fromkeys(sources or [item.source for item in group]))
+        if not target_sources:
+            raise ValueError("At least one source is required")
+        new_keywords = keywords if keywords is not None else base.keywords
+        new_max = None if clear_max_price else (
+            max_price if max_price is not None else base.max_price
+        )
+        new_min = None if clear_min_price else (
+            min_price if min_price is not None else base.min_price
+        )
+        new_condition = condition if condition is not None else base.condition
+        new_bin = base.buy_it_now if buy_it_now is None else buy_it_now
+        criteria_changed = any(
+            (
+                keywords is not None,
+                max_price is not None,
+                min_price is not None,
+                condition is not None,
+                buy_it_now is not None,
+                clear_max_price,
+                clear_min_price,
+            )
+        )
+        now = _utcnow()
+        await self.conn.execute(
+            """
+            UPDATE searches
+            SET keywords = ?, keywords_normalized = ?, max_price = ?,
+                min_price = ?, condition = ?, updated_at = ?
+            WHERE group_key = ? AND telegram_id = ?
+            """,
+            (
+                new_keywords,
+                self._normalize_keywords(new_keywords),
+                new_max,
+                new_min,
+                new_condition,
+                now,
+                base.group_key,
+                telegram_id,
+            ),
+        )
+        existing_by_source = {item.source: item for item in group}
+        for source, existing in existing_by_source.items():
+            if source not in target_sources:
+                await self.conn.execute(
+                    "DELETE FROM searches WHERE id = ?",
+                    (existing.id,),
+                )
+                continue
+            filters = dict(existing.filters_json)
+            source_bin = new_bin
+            if source in {Source.POSHMARK, Source.ETSY}:
+                filters.pop("marketplace", None)
+                source_bin = False
+            elif marketplace:
+                filters["marketplace"] = marketplace
+            await self.conn.execute(
+                """
+                UPDATE searches
+                SET buy_it_now = ?, filters_json = ?
+                WHERE id = ?
+                """,
+                (1 if source_bin else 0, json.dumps(filters), existing.id),
+            )
+        missing_sources = [
+            source for source in target_sources if source not in existing_by_source
+        ]
+        for source in missing_sources:
+            filters: dict[str, Any] = {}
+            source_bin = new_bin
+            if source in {Source.POSHMARK, Source.ETSY}:
+                source_bin = False
+            elif marketplace:
+                filters["marketplace"] = marketplace
+            await self.conn.execute(
+                """
+                INSERT INTO searches (
+                    telegram_id, source, keywords, keywords_normalized, group_key,
+                    max_price, min_price, condition, buy_it_now, paused,
+                    filters_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    telegram_id,
+                    source.value,
+                    new_keywords.strip(),
+                    self._normalize_keywords(new_keywords),
+                    base.group_key,
+                    new_max,
+                    new_min,
+                    new_condition,
+                    1 if source_bin else 0,
+                    1 if base.paused else 0,
+                    json.dumps(filters),
+                    now,
+                    now,
+                ),
+            )
+        if criteria_changed:
+            await self.conn.execute(
+                """
+                DELETE FROM seen_items
+                WHERE search_id IN (
+                    SELECT id FROM searches
+                    WHERE group_key = ? AND telegram_id = ?
+                )
+                """,
+                (base.group_key, telegram_id),
+            )
+        await self.conn.commit()
+        return await self.get_search_group(base.group_key, telegram_id)
+
+    async def set_search_group_paused(
+        self,
+        search_id: int,
+        telegram_id: int,
+        paused: bool,
+    ) -> bool:
+        search = await self.get_search(search_id)
+        if search is None or search.telegram_id != telegram_id:
+            return False
+        cursor = await self.conn.execute(
+            """
+            UPDATE searches
+            SET paused = ?, updated_at = ?
+            WHERE group_key = ? AND telegram_id = ?
+            """,
+            (1 if paused else 0, _utcnow(), search.group_key, telegram_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def delete_search_group(self, search_id: int, telegram_id: int) -> bool:
+        search = await self.get_search(search_id)
+        if search is None or search.telegram_id != telegram_id:
+            return False
+        cursor = await self.conn.execute(
+            "DELETE FROM searches WHERE group_key = ? AND telegram_id = ?",
+            (search.group_key, telegram_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
 
     async def set_search_paused(
         self, search_id: int, telegram_id: int, paused: bool
@@ -782,6 +1024,7 @@ class Database:
             telegram_id=row["telegram_id"],
             source=Source(row["source"]),
             keywords=row["keywords"],
+            group_key=row["group_key"],
             max_price=row["max_price"],
             min_price=row["min_price"],
             condition=row["condition"],
