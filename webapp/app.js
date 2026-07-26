@@ -59,6 +59,10 @@
     editKeywords: document.getElementById("edit-keywords"),
     editMin: document.getElementById("edit-min"),
     editMax: document.getElementById("edit-max"),
+    editMarketplace: document.getElementById("edit-marketplace"),
+    editMarketplaceWrap: document.getElementById("edit-marketplace-wrap"),
+    editBin: document.getElementById("edit-bin"),
+    editBinWrap: document.getElementById("edit-bin-wrap"),
   };
 
   function initData() {
@@ -140,6 +144,13 @@
     els.createMarketplaceWrap.classList.toggle("hidden", !hasEbay);
   }
 
+  function syncEditSourceFields() {
+    const sources = selectedSearchSources(els.editSources);
+    const hasEbay = sources.some((source) => source !== "poshmark" && source !== "etsy");
+    els.editBinWrap.classList.toggle("hidden", !hasEbay);
+    els.editMarketplaceWrap.classList.toggle("hidden", !hasEbay);
+  }
+
   function fillSearchSourcePicker(container, selected = []) {
     const labels = state.me.source_labels || {};
     const enabled = state.me.enabled_sources || [];
@@ -159,16 +170,22 @@
   }
 
   function fillCreateMarketplace() {
+    fillMarketplaceSelect(
+      els.createMarketplace,
+      state.me.ebay_marketplace || "EBAY_US",
+    );
+  }
+
+  function fillMarketplaceSelect(select, selected) {
     const labels = state.me.ebay_marketplace_labels || {};
     const markets = state.me.ebay_marketplaces || ["EBAY_US"];
-    const current = state.me.ebay_marketplace || "EBAY_US";
-    els.createMarketplace.innerHTML = "";
+    select.innerHTML = "";
     markets.forEach((market) => {
       const opt = document.createElement("option");
       opt.value = market;
       opt.textContent = labels[market] || market;
-      if (market === current) opt.selected = true;
-      els.createMarketplace.appendChild(opt);
+      if (market === selected) opt.selected = true;
+      select.appendChild(opt);
     });
   }
 
@@ -417,6 +434,13 @@
         const item = state.searches.find((search) => search.id === id);
         els.editId.value = String(item.id);
         fillSearchSourcePicker(els.editSources, item.sources || [item.source]);
+        els.editSources.onchange = syncEditSourceFields;
+        fillMarketplaceSelect(
+          els.editMarketplace,
+          item.marketplace || state.me.ebay_marketplace || "EBAY_US",
+        );
+        els.editBin.checked = Boolean(item.buy_it_now);
+        syncEditSourceFields();
         els.editKeywords.value = item.keywords;
         els.editMin.value = item.min_price ?? "";
         els.editMax.value = item.max_price ?? "";
@@ -468,6 +492,10 @@
       clear_min_price: minValue === "",
       clear_max_price: maxValue === "",
     };
+    if (sources.some((source) => source !== "poshmark" && source !== "etsy")) {
+      payload.marketplace = els.editMarketplace.value;
+      payload.buy_it_now = els.editBin.checked;
+    }
     try {
       await api(`/searches/${id}`, {
         method: "PATCH",
