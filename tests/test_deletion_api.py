@@ -113,6 +113,8 @@ class DeletionApiTests(unittest.IsolatedAsyncioTestCase):
             json={
                 "sources": ["etsy", "ebay_parser"],
                 "keywords": "signed vintage brooch",
+                "marketplace": "EBAY_GB",
+                "buy_it_now": True,
             },
         )
         self.assertEqual(updated.status_code, 200, updated.text)
@@ -120,6 +122,8 @@ class DeletionApiTests(unittest.IsolatedAsyncioTestCase):
         listed = self.client.get("/api/searches", headers=self.auth_headers).json()["items"]
         self.assertEqual(len(listed), 1)
         self.assertEqual(listed[0]["keywords"], "signed vintage brooch")
+        self.assertEqual(listed[0]["marketplace"], "EBAY_GB")
+        self.assertTrue(listed[0]["buy_it_now"])
 
         deleted = self.client.delete(
             f"/api/searches/{search_id}",
