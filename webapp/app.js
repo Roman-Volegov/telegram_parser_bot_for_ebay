@@ -616,19 +616,6 @@
     return Number.isFinite(n) ? n : null;
   }
 
-  function initialTab() {
-    const params = new URLSearchParams(location.search || "");
-    const fromQuery = (params.get("tab") || "").trim();
-    if (["settings", "create", "searches", "logs"].includes(fromQuery)) {
-      return fromQuery;
-    }
-    const hash = (location.hash || "").replace("#", "");
-    if (hash === "settings" || hash === "create" || hash === "searches" || hash === "logs") {
-      return hash;
-    }
-    return null;
-  }
-
   waitForInitData()
     .then((data) => {
       if (!data) {
@@ -639,8 +626,7 @@
       return loadAll();
     })
     .then(() => {
-      const tab = initialTab() || "searches";
-      switchTab(tab);
+      switchTab("searches");
     })
     .catch((err) => showError(err.message || "Ошибка загрузки"));
 })();
