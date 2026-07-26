@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from bot.db import Database
 from bot.models import (
@@ -12,6 +12,7 @@ from bot.models import (
     EBAY_MARKETPLACES,
     NON_EBAY_SOURCES,
     SOURCE_LABELS,
+    Search,
     Source,
     User,
     UserStatus,
@@ -27,7 +28,8 @@ logger = logging.getLogger(__name__)
 
 
 class SearchCreateIn(BaseModel):
-    source: Source
+    source: Source | None = None
+    sources: list[Source] = Field(default_factory=list, max_length=len(Source))
     keywords: str = Field(min_length=2, max_length=200)
     min_price: float | None = None
     max_price: float | None = None
@@ -35,8 +37,17 @@ class SearchCreateIn(BaseModel):
     buy_it_now: bool = True
     marketplace: str | None = None
 
+    @model_validator(mode="after")
+    def validate_sources(self):
+        selected = list(dict.fromkeys([*self.sources, *([self.source] if self.source else [])]))
+        if not selected:
+            raise ValueError("Выберите хотя бы один источник")
+        self.sources = selected
+        return self
+
 
 class SearchUpdateIn(BaseModel):
+    sources: list[Source] | None = Field(default=None, min_length=1, max_length=len(Source))
     keywords: str | None = Field(default=None, min_length=2, max_length=200)
     min_price: float | None = None
     max_price: float | None = None
@@ -46,6 +57,7 @@ class SearchUpdateIn(BaseModel):
     clear_prices: bool = False
     clear_min_price: bool = False
     clear_max_price: bool = False
+    marketplace: str | None = None
 
 
 class SetupIn(BaseModel):
@@ -139,27 +151,40 @@ def create_api_router(
     @router.get("/searches")
     async def api_list_searches(user: User = Depends(current_user)) -> dict[str, Any]:
         searches = await db.list_searches(user.telegram_id)
-        return {
-            "items": [
+        grouped: dict[str, list[Search]] = {}
+        for search in searches:
+            grouped.setdefault(search.group_key, []).append(search)
+        items: list[dict[str, Any]] = []
+        for group in grouped.values():
+            representative = group[0]
+            marketplaces = [
+                item.marketplace for item in group if item.marketplace is not None
+            ]
+            items.append(
                 {
-                    "id": s.id,
-                    "source": s.source.value,
-                    "source_label": SOURCE_LABELS[s.source],
-                    "keywords": s.keywords,
-                    "min_price": s.min_price,
-                    "max_price": s.max_price,
-                    "condition": s.condition,
-                    "buy_it_now": s.buy_it_now,
-                    "paused": s.paused,
-                    "marketplace": s.marketplace,
+                    "id": representative.id,
+                    "group_key": representative.group_key,
+                    "sources": [item.source.value for item in group],
+                    "source_labels": [SOURCE_LABELS[item.source] for item in group],
+                    # Поля совместимости для старых клиентов.
+                    "source": representative.source.value,
+                    "source_label": SOURCE_LABELS[representative.source],
+                    "keywords": representative.keywords,
+                    "min_price": representative.min_price,
+                    "max_price": representative.max_price,
+                    "condition": representative.condition,
+                    "buy_it_now": any(item.buy_it_now for item in group),
+                    "paused": all(item.paused for item in group),
+                    "marketplace": marketplaces[0] if marketplaces else None,
                     "marketplace_label": (
-                        EBAY_MARKETPLACE_LABELS.get(s.marketplace, s.marketplace)
-                        if s.marketplace
+                        EBAY_MARKETPLACE_LABELS.get(marketplaces[0], marketplaces[0])
+                        if marketplaces
                         else None
                     ),
                 }
-                for s in searches
-            ]
+            )
+        return {
+            "items": items
         }
 
     @router.get("/poll-logs")
@@ -191,54 +216,58 @@ def create_api_router(
     ) -> dict[str, Any]:
         if not user.setup_completed or not user.enabled_sources:
             raise HTTPException(status_code=400, detail="Сначала завершите настройки")
-        if payload.source not in user.enabled_sources:
+        selected_sources = payload.sources
+        unavailable = [
+            source for source in selected_sources if source not in user.enabled_sources
+        ]
+        if unavailable:
             raise HTTPException(status_code=400, detail="Источник не включён в настройках")
 
         marketplace: str | None = None
-        buy_it_now = payload.buy_it_now
-        if payload.source in NON_EBAY_SOURCES:
-            buy_it_now = False
-            marketplace = None
-        else:
+        if any(source not in NON_EBAY_SOURCES for source in selected_sources):
             marketplace = payload.marketplace or user.ebay_marketplace or "EBAY_US"
             if marketplace not in EBAY_MARKETPLACES:
                 raise HTTPException(status_code=400, detail="Неизвестный marketplace")
 
-        duplicate = await db.find_identical_search(
-            user.telegram_id,
-            payload.source,
-            payload.keywords,
-            max_price=payload.max_price,
-            min_price=payload.min_price,
-            condition=payload.condition,
-            buy_it_now=buy_it_now,
-            marketplace=marketplace,
-        )
-        if duplicate is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Такой поиск уже есть (#{duplicate.id}). "
-                    "Измените ключевые слова, фильтры или источник."
-                ),
+        for source in selected_sources:
+            source_marketplace = None if source in NON_EBAY_SOURCES else marketplace
+            duplicate = await db.find_identical_search(
+                user.telegram_id,
+                source,
+                payload.keywords,
+                max_price=payload.max_price,
+                min_price=payload.min_price,
+                condition=payload.condition,
+                buy_it_now=payload.buy_it_now if source not in NON_EBAY_SOURCES else False,
+                marketplace=source_marketplace,
             )
+            if duplicate is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Такой поиск уже есть для {SOURCE_LABELS[source]} "
+                        f"(#{duplicate.id})."
+                    ),
+                )
 
-        search = await db.add_search(
+        searches = await db.add_search_group(
             user.telegram_id,
-            payload.source,
+            selected_sources,
             payload.keywords,
             max_price=payload.max_price,
             min_price=payload.min_price,
             condition=payload.condition,
-            buy_it_now=buy_it_now,
+            buy_it_now=payload.buy_it_now,
             marketplace=marketplace,
         )
+        search = searches[0]
         if poller is not None:
-            poller.schedule_search(search, notify=False, record_log=False)
+            for item in searches:
+                poller.schedule_search(item, notify=False, record_log=False)
             try:
                 market_bit = (
-                    f" · {EBAY_MARKETPLACE_LABELS.get(search.marketplace, search.marketplace)}"
-                    if search.marketplace
+                    f" · {EBAY_MARKETPLACE_LABELS.get(marketplace, marketplace)}"
+                    if marketplace
                     else ""
                 )
                 price_bits: list[str] = []
@@ -251,7 +280,8 @@ def create_api_router(
                     user.telegram_id,
                     (
                         f"✅ Новый поиск создан #{search.id}\n"
-                        f"{SOURCE_LABELS[search.source]}{market_bit}\n"
+                        f"{', '.join(SOURCE_LABELS[item.source] for item in searches)}"
+                        f"{market_bit}\n"
                         f"<code>{search.keywords}</code>{price_bit}\n\n"
                         "Новые лоты будут приходить в этот чат."
                     ),
@@ -269,8 +299,8 @@ def create_api_router(
             "ok": True,
             "message": f"Новый поиск создан #{search.id}",
             "keywords": search.keywords,
-            "source": search.source.value,
-            "source_label": SOURCE_LABELS[search.source],
+            "sources": [item.source.value for item in searches],
+            "source_labels": [SOURCE_LABELS[item.source] for item in searches],
         }
 
     @router.patch("/searches/{search_id}")
@@ -279,16 +309,69 @@ def create_api_router(
         payload: SearchUpdateIn,
         user: User = Depends(current_user),
     ) -> dict[str, Any]:
-        search = await db.get_search(search_id)
-        if search is None or search.telegram_id != user.telegram_id:
+        group = await db.get_search_group_by_id(search_id, user.telegram_id)
+        if not group:
             raise HTTPException(status_code=404, detail="Поиск не найден")
+        search = group[0]
+        selected_sources = payload.sources or [item.source for item in group]
+        if any(source not in user.enabled_sources for source in selected_sources):
+            raise HTTPException(status_code=400, detail="Источник не включён в настройках")
+        marketplace = None
+        if any(source not in NON_EBAY_SOURCES for source in selected_sources):
+            marketplace = (
+                payload.marketplace
+                or next((item.marketplace for item in group if item.marketplace), None)
+                or user.ebay_marketplace
+                or "EBAY_US"
+            )
+            if marketplace not in EBAY_MARKETPLACES:
+                raise HTTPException(status_code=400, detail="Неизвестный marketplace")
+
+        new_keywords = payload.keywords or search.keywords
+        new_min = None if payload.clear_prices or payload.clear_min_price else (
+            payload.min_price if payload.min_price is not None else search.min_price
+        )
+        new_max = None if payload.clear_prices or payload.clear_max_price else (
+            payload.max_price if payload.max_price is not None else search.max_price
+        )
+        new_condition = (
+            payload.condition if payload.condition is not None else search.condition
+        )
+        for source in selected_sources:
+            existing = next((item for item in group if item.source is source), None)
+            source_bin = False if source in NON_EBAY_SOURCES else (
+                payload.buy_it_now
+                if payload.buy_it_now is not None
+                else existing.buy_it_now if existing is not None else True
+            )
+            duplicate = await db.find_identical_search(
+                user.telegram_id,
+                source,
+                new_keywords,
+                max_price=new_max,
+                min_price=new_min,
+                condition=new_condition,
+                buy_it_now=source_bin,
+                marketplace=None if source in NON_EBAY_SOURCES else marketplace,
+                exclude_group_key=search.group_key,
+            )
+            if duplicate is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Такой поиск уже есть для {SOURCE_LABELS[source]}.",
+                )
 
         if payload.paused is not None:
-            await db.set_search_paused(search_id, user.telegram_id, payload.paused)
+            await db.set_search_group_paused(
+                search_id,
+                user.telegram_id,
+                payload.paused,
+            )
 
-        updated = await db.update_search(
+        updated = await db.update_search_group(
             search_id,
             user.telegram_id,
+            sources=selected_sources,
             keywords=payload.keywords,
             min_price=payload.min_price,
             max_price=payload.max_price,
@@ -296,11 +379,13 @@ def create_api_router(
             buy_it_now=payload.buy_it_now,
             clear_max_price=payload.clear_prices or payload.clear_max_price,
             clear_min_price=payload.clear_prices or payload.clear_min_price,
+            marketplace=marketplace,
         )
-        if updated is None:
+        if not updated:
             raise HTTPException(status_code=404, detail="Поиск не найден")
         criteria_changed = any(
             (
+                payload.sources is not None,
                 payload.keywords is not None,
                 payload.min_price is not None,
                 payload.max_price is not None,
@@ -312,15 +397,20 @@ def create_api_router(
             )
         )
         if criteria_changed and poller is not None:
-            poller.schedule_search(updated, notify=False, record_log=False)
-        return {"ok": True, "paused": updated.paused}
+            for item in updated:
+                poller.schedule_search(item, notify=False, record_log=False)
+        return {
+            "ok": True,
+            "paused": all(item.paused for item in updated),
+            "sources": [item.source.value for item in updated],
+        }
 
     @router.delete("/searches/{search_id}")
     async def api_delete_search(
         search_id: int,
         user: User = Depends(current_user),
     ) -> dict[str, Any]:
-        ok = await db.delete_search(search_id, user.telegram_id)
+        ok = await db.delete_search_group(search_id, user.telegram_id)
         if not ok:
             raise HTTPException(status_code=404, detail="Поиск не найден")
         return {"ok": True}

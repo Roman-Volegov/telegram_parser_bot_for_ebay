@@ -262,7 +262,7 @@ async def search_toggle(callback: CallbackQuery, db: Database, user: User) -> No
     if search is None or search.telegram_id != user.telegram_id:
         await callback.answer("Не найден", show_alert=True)
         return
-    await db.set_search_paused(search_id, user.telegram_id, not search.paused)
+    await db.set_search_group_paused(search_id, user.telegram_id, not search.paused)
     searches = await db.list_searches(user.telegram_id)
     text = "Ваши поиски:\n\n" + "\n\n".join(_format_search(s) for s in searches)
     await callback.message.edit_text(
@@ -314,7 +314,7 @@ async def search_del_ask(callback: CallbackQuery, db: Database, user: User) -> N
 @router.callback_query(F.data.startswith("search:delyes:"))
 async def search_del_yes(callback: CallbackQuery, db: Database, user: User) -> None:
     search_id = int((callback.data or "").split(":")[-1])
-    ok = await db.delete_search(search_id, user.telegram_id)
+    ok = await db.delete_search_group(search_id, user.telegram_id)
     await callback.message.answer("🗑 Удалено." if ok else "Поиск не найден.")
     await callback.answer()
 
@@ -333,7 +333,7 @@ async def cmd_pause(
     if search_id is None:
         await message.answer("Формат: /pause <id>")
         return
-    ok = await db.set_search_paused(search_id, user.telegram_id, True)
+    ok = await db.set_search_group_paused(search_id, user.telegram_id, True)
     await message.answer("⏸ Пауза." if ok else "Поиск не найден.")
 
 
@@ -345,7 +345,7 @@ async def cmd_resume(
     if search_id is None:
         await message.answer("Формат: /resume <id>")
         return
-    ok = await db.set_search_paused(search_id, user.telegram_id, False)
+    ok = await db.set_search_group_paused(search_id, user.telegram_id, False)
     await message.answer("▶️ Возобновлён." if ok else "Поиск не найден.")
 
 
@@ -357,7 +357,7 @@ async def cmd_delete(
     if search_id is None:
         await message.answer("Формат: /delete <id>")
         return
-    ok = await db.delete_search(search_id, user.telegram_id)
+    ok = await db.delete_search_group(search_id, user.telegram_id)
     await message.answer("🗑 Удалено." if ok else "Поиск не найден.")
 
 
@@ -422,11 +422,11 @@ async def edit_filters(
     search_id = int(data["edit_id"])
     keywords = data.get("keywords")
     if text == "-":
-        updated = await db.update_search(
+        updated_group = await db.update_search_group(
             search_id, user.telegram_id, keywords=keywords
         )
     elif text.lower() == "clear":
-        updated = await db.update_search(
+        updated_group = await db.update_search_group(
             search_id,
             user.telegram_id,
             keywords=keywords,
@@ -436,7 +436,7 @@ async def edit_filters(
         )
     else:
         min_price, max_price, condition, buy_it_now = _parse_filters(text)
-        updated = await db.update_search(
+        updated_group = await db.update_search_group(
             search_id,
             user.telegram_id,
             keywords=keywords,
@@ -446,10 +446,12 @@ async def edit_filters(
             buy_it_now=buy_it_now,
         )
     await state.clear()
-    if updated is None:
+    if not updated_group:
         await message.answer("Не удалось обновить.")
         return
-    poller.schedule_search(updated, notify=False, record_log=False)
+    for updated in updated_group:
+        poller.schedule_search(updated, notify=False, record_log=False)
+    updated = updated_group[0]
     await message.answer("Обновлено:\n" + _format_search(updated), parse_mode="HTML")
 
 
