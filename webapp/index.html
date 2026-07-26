@@ -36,10 +36,10 @@
 
       <section id="panel-create" class="panel">
         <form id="form-create" class="form">
-          <label>
-            Источник
-            <select id="create-source" required></select>
-          </label>
+          <fieldset class="source-picker">
+            <legend>Источники</legend>
+            <div id="create-sources" class="sources sources-compact"></div>
+          </fieldset>
           <label>
             Ключевые слова
             <input id="create-keywords" type="text" placeholder="nike dunk low" required minlength="2" />
@@ -138,6 +138,10 @@
       <form id="form-edit" class="form" method="dialog">
         <h2 class="section-title">Изменить поиск</h2>
         <input id="edit-id" type="hidden" />
+        <fieldset class="source-picker">
+          <legend>Источники</legend>
+          <div id="edit-sources" class="sources sources-compact"></div>
+        </fieldset>
         <label>
           Ключевые слова
           <input id="edit-keywords" type="text" minlength="2" maxlength="200" required />

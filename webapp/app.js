@@ -30,7 +30,7 @@
     searchesEmpty: document.getElementById("searches-empty"),
     logsList: document.getElementById("logs-list"),
     logsEmpty: document.getElementById("logs-empty"),
-    createSource: document.getElementById("create-source"),
+    createSources: document.getElementById("create-sources"),
     createMarketplace: document.getElementById("create-marketplace"),
     createMarketplaceWrap: document.getElementById("create-marketplace-wrap"),
     createBinWrap: document.getElementById("create-bin-wrap"),
@@ -55,6 +55,7 @@
     botUsername: document.getElementById("bot-username"),
     editDialog: document.getElementById("edit-dialog"),
     editId: document.getElementById("edit-id"),
+    editSources: document.getElementById("edit-sources"),
     editKeywords: document.getElementById("edit-keywords"),
     editMin: document.getElementById("edit-min"),
     editMax: document.getElementById("edit-max"),
@@ -118,6 +119,10 @@
     return [...els.sourcesBox.querySelectorAll("input:checked")].map((el) => el.value);
   }
 
+  function selectedSearchSources(container) {
+    return [...container.querySelectorAll("input:checked")].map((el) => el.value);
+  }
+
   function syncEbayBlockVisibility() {
     const show = selectedSources().includes("ebay_api");
     els.ebayApiBlock.classList.toggle("hidden", !show);
@@ -129,10 +134,28 @@
   }
 
   function syncCreateSourceFields() {
-    const source = els.createSource.value;
-    const hideEbayFields = source === "poshmark" || source === "etsy";
-    els.createBinWrap.classList.toggle("hidden", hideEbayFields);
-    els.createMarketplaceWrap.classList.toggle("hidden", hideEbayFields);
+    const sources = selectedSearchSources(els.createSources);
+    const hasEbay = sources.some((source) => source !== "poshmark" && source !== "etsy");
+    els.createBinWrap.classList.toggle("hidden", !hasEbay);
+    els.createMarketplaceWrap.classList.toggle("hidden", !hasEbay);
+  }
+
+  function fillSearchSourcePicker(container, selected = []) {
+    const labels = state.me.source_labels || {};
+    const enabled = state.me.enabled_sources || [];
+    const checked = new Set(selected);
+    container.innerHTML = "";
+    enabled.forEach((source, index) => {
+      const row = document.createElement("label");
+      row.className = "source-item";
+      row.innerHTML = `
+        <input type="checkbox" value="${source}" ${
+          checked.has(source) || (!selected.length && index === 0) ? "checked" : ""
+        } />
+        <span>${escapeHtml(labels[source] || source)}</span>
+      `;
+      container.appendChild(row);
+    });
   }
 
   function fillCreateMarketplace() {
@@ -154,14 +177,8 @@
     const enabled = new Set(state.me.enabled_sources || []);
     const marketLabels = state.me.ebay_marketplace_labels || {};
 
-    els.createSource.innerHTML = "";
-    enabled.forEach((source) => {
-      const opt = document.createElement("option");
-      opt.value = source;
-      opt.textContent = labels[source] || source;
-      els.createSource.appendChild(opt);
-    });
-    els.createSource.onchange = syncCreateSourceFields;
+    fillSearchSourcePicker(els.createSources);
+    els.createSources.onchange = syncCreateSourceFields;
     fillCreateMarketplace();
     syncCreateSourceFields();
 
@@ -242,11 +259,14 @@
       const region = item.marketplace_label
         ? `<span class="badge">${escapeHtml(item.marketplace_label)}</span>`
         : "";
+      const sourceBadges = (item.source_labels || [item.source_label])
+        .map((label) => `<span class="badge">${escapeHtml(label)}</span>`)
+        .join("");
       card.innerHTML = `
         <h3>${escapeHtml(item.keywords)}</h3>
         <p class="meta">
           <span class="badge ${item.paused ? "pause" : ""}">${item.paused ? "пауза" : "активен"}</span>
-          <span class="badge">${escapeHtml(item.source_label)}</span>
+          ${sourceBadges}
           ${region}
           ${priceBits.length ? escapeHtml(priceBits.join(" · ")) : "без фильтра цены"}
         </p>
@@ -396,6 +416,7 @@
       if (action === "edit") {
         const item = state.searches.find((search) => search.id === id);
         els.editId.value = String(item.id);
+        fillSearchSourcePicker(els.editSources, item.sources || [item.source]);
         els.editKeywords.value = item.keywords;
         els.editMin.value = item.min_price ?? "";
         els.editMax.value = item.max_price ?? "";
@@ -434,7 +455,13 @@
     const id = Number(els.editId.value);
     const minValue = els.editMin.value;
     const maxValue = els.editMax.value;
+    const sources = selectedSearchSources(els.editSources);
+    if (!sources.length) {
+      toast("Выберите хотя бы один источник");
+      return;
+    }
     const payload = {
+      sources,
       keywords: els.editKeywords.value.trim(),
       min_price: numOrNull(minValue),
       max_price: numOrNull(maxValue),
@@ -461,14 +488,19 @@
 
   document.getElementById("form-create").addEventListener("submit", async (event) => {
     event.preventDefault();
+    const sources = selectedSearchSources(els.createSources);
+    if (!sources.length) {
+      toast("Выберите хотя бы один источник");
+      return;
+    }
     const payload = {
-      source: els.createSource.value,
+      sources,
       keywords: document.getElementById("create-keywords").value.trim(),
       min_price: numOrNull(document.getElementById("create-min").value),
       max_price: numOrNull(document.getElementById("create-max").value),
       buy_it_now: document.getElementById("create-bin").checked,
     };
-    if (payload.source !== "poshmark" && payload.source !== "etsy") {
+    if (payload.sources.some((source) => source !== "poshmark" && source !== "etsy")) {
       payload.marketplace = els.createMarketplace.value;
     } else {
       payload.buy_it_now = false;
@@ -483,6 +515,7 @@
       }
       event.target.reset();
       document.getElementById("create-bin").checked = true;
+      fillSearchSourcePicker(els.createSources);
       fillCreateMarketplace();
       syncCreateSourceFields();
       await loadAll();
@@ -578,7 +611,7 @@
       return loadAll();
     })
     .then(() => {
-      const tab = initialTab() || (!state.me.setup_completed ? "settings" : "searches");
+      const tab = initialTab() || "searches";
       switchTab(tab);
     })
     .catch((err) => showError(err.message || "Ошибка загрузки"));
