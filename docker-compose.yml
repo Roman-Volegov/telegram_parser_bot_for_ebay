@@ -86,7 +86,7 @@ services:
     pids_limit: 64
     ports:
       - "80:80"
-      - "8443:443"
+      - "443:443"
     environment:
       MINIAPP_DOMAIN: ${MINIAPP_DOMAIN:?Set MINIAPP_DOMAIN in .env}
       ETSY_NOVNC_TOKEN: ${ETSY_NOVNC_TOKEN:?Set ETSY_NOVNC_TOKEN in .env}

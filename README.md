@@ -50,14 +50,14 @@ python -m bot
 cd ~/ebay-poshmark-bot
 cp .env.example .env
 # TELEGRAM_BOT_TOKEN, ADMIN_TELEGRAM_IDS, CREDENTIALS_ENCRYPTION_KEY
-# PUBLIC_BASE_URL=https://<IP>.sslip.io:8443
+# PUBLIC_BASE_URL=https://<IP>.sslip.io
 # MINIAPP_DOMAIN=<IP>.sslip.io
 sudo docker compose up -d --build
 ```
 
 - HTTP health: `127.0.0.1:18080` (не публикуется наружу)
-- HTTPS Mini App (Caddy): `8443` → `/app/`
-- Public landing page (English): `https://<IP>.sslip.io:8443/`
+- HTTPS Mini App (Caddy): `443` → `/app/`
+- Public landing page (English): `https://<IP>.sslip.io/`
 - Контейнеры: `ebay-poshmark-bot`, `ebay-poshmark-caddy`, `ebay-poshmark-redis`
 
 ### Ручная проверка Etsy DataDome

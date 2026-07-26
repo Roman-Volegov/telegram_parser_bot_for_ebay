@@ -1,4 +1,4 @@
-# Порт 443 хоста занят xray; Caddy HTTPS опубликован на 8443.
+# Caddy обслуживает Mini App на стандартных HTTP/HTTPS-портах.
 http://{$XUI_ACME_HOST} {
 	handle /.well-known/acme-challenge/* {
 		root * /srv/acme-challenge
@@ -8,7 +8,7 @@ http://{$XUI_ACME_HOST} {
 }
 
 http://{$MINIAPP_DOMAIN} {
-	redir https://{$MINIAPP_DOMAIN}:8443{uri} permanent
+	redir https://{$MINIAPP_DOMAIN}{uri} permanent
 }
 
 https://{$MINIAPP_DOMAIN} {
