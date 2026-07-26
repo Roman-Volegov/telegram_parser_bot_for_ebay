@@ -8,6 +8,7 @@
 - Источники: **eBay API**, **eBay Parser** (RSS + HTML), **Poshmark**, **Etsy**
 - `/setup` — выбор источников, OAuth-проверка ключей, deletion URL
 - Поиски: `/add` `/list` `/edit` `/pause` `/resume` `/delete`
+- Mini App: один поиск может включать несколько источников и отображается общей карточкой
 - Карточки: фото, цена, описание, URL-кнопка
 - Поллер (`POLL_INTERVAL_SEC`, по умолчанию 5 мин), тихий первый прогон
 - Cleanup `seen_items` старше 90 дней
