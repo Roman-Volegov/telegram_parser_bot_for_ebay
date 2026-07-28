@@ -714,6 +714,7 @@
       const sourceBadges = (item.source_labels || [item.source_label])
         .map((label) => `<span class="badge">${escapeHtml(label)}</span>`)
         .join("");
+      const catSummary = summarizeCategories(item.categories || {});
       card.innerHTML = `
         <h3>${escapeHtml(item.keywords)}</h3>
         <p class="meta">
@@ -721,6 +722,7 @@
           ${sourceBadges}
           ${region}
           ${priceBits.length ? escapeHtml(priceBits.join(" · ")) : "без фильтра цены"}
+          <span class="badge">${escapeHtml(catSummary)}</span>
         </p>
         <div class="actions">
           <button class="chip" data-action="edit" data-id="${item.id}" type="button">✏️ Изменить</button>
@@ -788,6 +790,31 @@
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
+  }
+
+  function summarizeCategories(categories) {
+    const bits = [];
+    Object.entries(categories || {}).forEach(([source, items]) => {
+      const count = Array.isArray(items) ? items.length : 0;
+      if (!count) return;
+      const label =
+        source.startsWith("ebay") ? "eBay" : source === "etsy" ? "Etsy" : source === "poshmark" ? "Poshmark" : source;
+      bits.push(`${label}: ${count}`);
+    });
+    return bits.length ? `кат. ${bits.join(", ")}` : "все категории";
+  }
+
+  function initialTab() {
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      const tab = (params.get("tab") || "").trim();
+      if (["searches", "create", "logs", "settings", "categories"].includes(tab)) {
+        return tab === "categories" ? "searches" : tab;
+      }
+    } catch (_) {
+      // ignore
+    }
+    return "searches";
   }
 
   async function loadAll() {
@@ -1092,7 +1119,7 @@
       return loadAll();
     })
     .then(() => {
-      switchTab("searches");
+      switchTab(initialTab());
     })
     .catch((err) => showError(err.message || "Ошибка загрузки"));
 })();

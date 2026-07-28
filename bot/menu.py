@@ -54,14 +54,15 @@ ADMIN_EXTRA_COMMANDS = [
 
 
 def settings_webapp_url(webapp_url: str) -> str:
-    """URL Mini App со вкладкой настроек (query, без #fragment)."""
+    """URL Mini App. Query v= сбрасывает кэш Telegram WebView."""
     base = webapp_url.split("#", 1)[0].split("?", 1)[0]
     if not base.endswith("/"):
         base = f"{base}/"
-    return f"{base}?tab=settings"
+    # Меняйте WEBAPP_CACHE_BUST при выкладке UI, если Telegram снова залипнет.
+    return f"{base}?v=20260728c&tab=searches"
 
 
-def open_miniapp_inline_kb(webapp_url: str, *, label: str = "⚙️ Открыть Mini App") -> InlineKeyboardMarkup | None:
+def open_miniapp_inline_kb(webapp_url: str, *, label: str = "📱 Открыть Mini App") -> InlineKeyboardMarkup | None:
     """Inline WebApp-кнопка — только так Telegram передаёт initData."""
     if not webapp_url.startswith("https://"):
         return None
@@ -120,7 +121,7 @@ async def setup_bot_commands(
     if webapp_url and webapp_url.startswith("https://"):
         await bot.set_chat_menu_button(
             menu_button=MenuButtonWebApp(
-                text="Настройки",
+                text="Mini App",
                 web_app=WebAppInfo(url=settings_webapp_url(webapp_url)),
             )
         )
