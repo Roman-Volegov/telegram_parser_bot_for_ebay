@@ -208,9 +208,10 @@
     }
     if (blocks.includes("etsy") && sources.includes("etsy")) {
       payload.etsy = (state.categoryDraft.etsy || [])
-        .filter((item) => item && item.taxonomy_id != null)
+        .filter((item) => item && (item.taxonomy_id != null || item.slug))
         .map((item) => ({
           taxonomy_id: item.taxonomy_id,
+          slug: item.slug || null,
           category_path: item.category_path || "",
         }));
     }
@@ -237,6 +238,7 @@
     }));
     draft.etsy = (raw.etsy || []).map((item) => ({
       taxonomy_id: item.taxonomy_id,
+      slug: item.slug || null,
       category_path: item.category_path || "",
     }));
     draft.poshmark = (raw.poshmark || []).map((item) => ({
@@ -437,8 +439,20 @@
       return;
     }
     if (block === "etsy") {
+      const taxonomyId =
+        meta.taxonomy_id != null
+          ? meta.taxonomy_id
+          : Number.isFinite(Number(node.id))
+            ? Number(node.id)
+            : null;
+      const slug =
+        meta.slug ||
+        (String(node.id || "").startsWith("slug:")
+          ? String(node.id).slice(5)
+          : null);
       state.categoryDraft[block][index] = {
-        taxonomy_id: meta.taxonomy_id != null ? meta.taxonomy_id : Number(node.id),
+        taxonomy_id: taxonomyId,
+        slug,
         category_path: node.path || node.name,
       };
       return;

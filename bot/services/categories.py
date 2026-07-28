@@ -171,11 +171,25 @@ def _normalize_one(entry: dict[str, Any], *, source: Source) -> dict[str, Any] |
         return out
     if source is Source.ETSY:
         raw_id = entry.get("taxonomy_id", entry.get("id"))
+        slug = str(entry.get("slug") or "").strip() or None
+        taxonomy_id = None
         try:
-            taxonomy_id = int(raw_id)
+            if raw_id is not None and not str(raw_id).startswith("slug:"):
+                taxonomy_id = int(raw_id)
         except (TypeError, ValueError):
+            taxonomy_id = None
+        if taxonomy_id is None and not slug:
+            # id вида slug:jewelry
+            raw = str(entry.get("id") or "")
+            if raw.startswith("slug:"):
+                slug = raw.removeprefix("slug:")
+        if taxonomy_id is None and not slug:
             return None
-        out = {"taxonomy_id": taxonomy_id}
+        out: dict[str, Any] = {}
+        if taxonomy_id is not None:
+            out["taxonomy_id"] = taxonomy_id
+        if slug:
+            out["slug"] = slug
         if path:
             out["category_path"] = path
         return out
@@ -209,7 +223,7 @@ def _dedupe_key(entry: dict[str, Any], *, source: Source) -> str:
     if source in EBAY_SOURCES:
         return f"ebay:{entry.get('category_id')}"
     if source is Source.ETSY:
-        return f"etsy:{entry.get('taxonomy_id')}"
+        return f"etsy:{entry.get('taxonomy_id') or entry.get('slug') or ''}"
     return (
         f"poshmark:{entry.get('department')}|{entry.get('category') or ''}|"
         f"{entry.get('subcategory') or ''}"

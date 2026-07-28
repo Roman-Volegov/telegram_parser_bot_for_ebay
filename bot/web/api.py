@@ -603,26 +603,8 @@ def create_api_router(
     async def api_categories_refresh(
         user: User = Depends(current_user),
     ) -> dict[str, Any]:
+        _ = user
         service = _require_taxonomies()
-        ebay_id = ""
-        ebay_secret = ""
-        etsy_key = ""
-        try:
-            pair = await credentials.get_ebay_keys(user.telegram_id)
-            if pair:
-                ebay_id, ebay_secret = pair
-        except Exception:
-            logger.debug("No eBay credentials for taxonomy refresh", exc_info=True)
-        try:
-            etsy_key = (await credentials.get_etsy_key(user.telegram_id)) or ""
-        except Exception:
-            logger.debug("No Etsy credentials for taxonomy refresh", exc_info=True)
-        result = await service.refresh(
-            ebay_client_id=ebay_id,
-            ebay_client_secret=ebay_secret,
-            etsy_api_key=etsy_key,
-            force=True,
-        )
-        return result
+        return await service.refresh(force=True)
 
     return router

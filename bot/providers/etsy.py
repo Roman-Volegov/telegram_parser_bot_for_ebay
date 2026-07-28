@@ -50,16 +50,31 @@ class EtsyProvider(BaseProvider):
         if not query:
             return []
         categories = categories_for_search(search.filters_json, self.source)
-        # Open API — только если ключ реально есть; иначе Playwright (обход DataDome)
-        if self._api_key:
-            search_once = self._search_via_api
-        else:
-            search_once = self._search_via_playwright
+
+        def can_use_api(category: dict | None) -> bool:
+            if not self._api_key:
+                return False
+            if category is None:
+                return True
+            return category.get("taxonomy_id") is not None
+
         if not categories:
-            return await search_once(search, limit=limit, category=None)
+            if can_use_api(None):
+                return await self._search_via_api(search, limit=limit, category=None)
+            return await self._search_via_playwright(search, limit=limit, category=None)
+
         batches: list[list[Listing]] = []
         for category in categories:
-            batches.append(await search_once(search, limit=limit, category=category))
+            if can_use_api(category):
+                batches.append(
+                    await self._search_via_api(search, limit=limit, category=category)
+                )
+            else:
+                batches.append(
+                    await self._search_via_playwright(
+                        search, limit=limit, category=category
+                    )
+                )
         return merge_listings_by_id(batches, limit=limit)
 
     async def _search_via_api(
@@ -149,6 +164,10 @@ class EtsyProvider(BaseProvider):
             params["max"] = str(search.max_price)
         if category and category.get("taxonomy_id") is not None:
             params["taxonomy_id"] = str(category["taxonomy_id"])
+            return f"https://www.etsy.com/search?{urlencode(params)}"
+        slug = str((category or {}).get("slug") or "").strip()
+        if slug:
+            return f"https://www.etsy.com/c/{slug}?{urlencode(params)}"
         return f"https://www.etsy.com/search?{urlencode(params)}"
 
     async def _search_via_playwright(

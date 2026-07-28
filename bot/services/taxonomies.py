@@ -3,29 +3,27 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import time
-from base64 import b64encode
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
-
-import httpx
 
 from bot.models import EBAY_MARKETPLACES, Source
-from bot.providers.http_utils import build_client
 from bot.services.categories import EBAY_SOURCES
+from bot.services.taxonomy_parsers import (
+    crawl_ebay_marketplace,
+    crawl_etsy_categories,
+    crawl_poshmark_categories,
+    make_parser_client,
+)
 
 logger = logging.getLogger(__name__)
 
 TAXONOMY_TTL_SEC = 30 * 24 * 60 * 60  # месяц
-EBAY_OAUTH_SCOPE = "https://api.ebay.com/oauth/api_scope"
-ETSY_TAXONOMY_URL = "https://openapi.etsy.com/v3/application/seller-taxonomy/nodes"
 
 
 class TaxonomyService:
-    """Кэш деревьев категорий + поиск + ручное/месячное обновление."""
+    """Кэш деревьев категорий + поиск + ручное/месячное обновление парсером."""
 
     def __init__(
         self,
@@ -39,9 +37,8 @@ class TaxonomyService:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._proxy = proxy
-        self._ebay_client_id = (ebay_client_id or "").strip()
-        self._ebay_client_secret = (ebay_client_secret or "").strip()
-        self._etsy_api_key = (etsy_api_key or "").strip()
+        # legacy kwargs ignored — refresh только парсером, без API-ключей
+        _ = (ebay_client_id, ebay_client_secret, etsy_api_key)
         self._lock = asyncio.Lock()
         self._refreshing = False
         self._memory: dict[str, dict[str, Any]] = {}
@@ -79,11 +76,13 @@ class TaxonomyService:
                     "nodes": len(tree.get("nodes") or []),
                     "updated_at": tree.get("updated_at"),
                     "stale": self._is_stale(tree),
+                    "method": tree.get("method") or "seed",
                 }
             )
         return {
             "ttl_days": TAXONOMY_TTL_SEC // 86400,
             "refreshing": self._refreshing,
+            "mode": "parser",
             "trees": trees,
         }
 
@@ -139,42 +138,25 @@ class TaxonomyService:
         etsy_api_key: str | None = None,
         force: bool = True,
     ) -> dict[str, Any]:
+        _ = (ebay_client_id, ebay_client_secret, etsy_api_key, force)
         async with self._lock:
             if self._refreshing:
                 return {"ok": False, "message": "Обновление уже выполняется", "refreshing": True}
             self._refreshing = True
         try:
             results: dict[str, Any] = {}
-            ebay_id = (ebay_client_id or self._ebay_client_id or "").strip()
-            ebay_secret = (ebay_client_secret or self._ebay_client_secret or "").strip()
-            etsy_key = (etsy_api_key or self._etsy_api_key or "").strip()
-
-            if ebay_id and ebay_secret:
-                try:
-                    results["ebay"] = await self._refresh_ebay(ebay_id, ebay_secret)
-                except Exception as exc:
-                    logger.exception("eBay taxonomy refresh failed")
-                    results["ebay"] = {"ok": False, "error": str(exc)}
-            else:
-                results["ebay"] = {
-                    "ok": False,
-                    "error": "Нет eBay Client ID/Secret для обновления taxonomy",
-                }
-
-            if etsy_key:
-                try:
-                    results["etsy"] = await self._refresh_etsy(etsy_key)
-                except Exception as exc:
-                    logger.exception("Etsy taxonomy refresh failed")
-                    results["etsy"] = {"ok": False, "error": str(exc)}
-            else:
-                results["etsy"] = {
-                    "ok": False,
-                    "error": "Нет Etsy API key для обновления taxonomy",
-                }
-
             try:
-                results["poshmark"] = await self._refresh_poshmark()
+                results["ebay"] = await self._refresh_ebay_parser()
+            except Exception as exc:
+                logger.exception("eBay parser taxonomy refresh failed")
+                results["ebay"] = {"ok": False, "error": str(exc)}
+            try:
+                results["etsy"] = await self._refresh_etsy_parser()
+            except Exception as exc:
+                logger.exception("Etsy parser taxonomy refresh failed")
+                results["etsy"] = {"ok": False, "error": str(exc)}
+            try:
+                results["poshmark"] = await self._refresh_poshmark_parser()
             except Exception as exc:
                 logger.exception("Poshmark taxonomy refresh failed")
                 results["poshmark"] = {"ok": False, "error": str(exc)}
@@ -184,7 +166,11 @@ class TaxonomyService:
             )
             return {
                 "ok": ok_any,
-                "message": "Каталоги обновлены" if ok_any else "Не удалось обновить каталоги",
+                "message": (
+                    "Каталоги обновлены парсером"
+                    if ok_any
+                    else "Не удалось обновить каталоги парсером"
+                ),
                 "results": results,
                 "status": self.status(),
             }
@@ -219,7 +205,6 @@ class TaxonomyService:
         key = self._cache_key(source, marketplace)
         tree = self._load(key)
         if tree is None:
-            # fallback: ebay without market → EBAY_US; seed
             if key.startswith("ebay:"):
                 tree = self._load("ebay:EBAY_US")
             if tree is None:
@@ -303,6 +288,7 @@ class TaxonomyService:
                 "source": "ebay",
                 "marketplace": market,
                 "updated_at": now,
+                "method": "seed",
                 "nodes": _ebay_seed_nodes(),
             }
         if key == "etsy":
@@ -310,57 +296,67 @@ class TaxonomyService:
                 "source": "etsy",
                 "marketplace": None,
                 "updated_at": now,
+                "method": "seed",
                 "nodes": _etsy_seed_nodes(),
             }
         return {
             "source": "poshmark",
             "marketplace": None,
             "updated_at": now,
+            "method": "seed",
             "nodes": _poshmark_seed_nodes(),
         }
 
-    async def _refresh_ebay(self, client_id: str, client_secret: str) -> dict[str, Any]:
-        client = build_client(self._proxy)
+    async def _refresh_ebay_parser(self) -> dict[str, Any]:
+        client = make_parser_client(self._proxy)
         try:
-            token = await _ebay_app_token(client, client_id, client_secret)
             updated = 0
+            total_nodes = 0
+            errors: list[str] = []
             for market in EBAY_MARKETPLACES:
-                tree_id = await _ebay_default_tree_id(client, token, market)
-                nodes = await _ebay_flatten_tree(client, token, tree_id)
-                self._save(
-                    f"ebay:{market}",
-                    {
-                        "source": "ebay",
-                        "marketplace": market,
-                        "updated_at": _utcnow(),
-                        "tree_id": tree_id,
-                        "nodes": nodes,
-                    },
-                )
-                updated += 1
-            return {"ok": True, "markets": updated}
+                try:
+                    # Полный expand только для US — остальные быстрее с all-categories.
+                    expand = 20 if market == "EBAY_US" else 0
+                    nodes = await crawl_ebay_marketplace(
+                        client, market, max_expand=expand
+                    )
+                    self._save(
+                        f"ebay:{market}",
+                        {
+                            "source": "ebay",
+                            "marketplace": market,
+                            "updated_at": _utcnow(),
+                            "method": "parser",
+                            "nodes": nodes,
+                        },
+                    )
+                    updated += 1
+                    total_nodes += len(nodes)
+                except Exception as exc:
+                    logger.warning("eBay parser refresh failed for %s: %s", market, exc)
+                    errors.append(f"{market}: {exc}")
+            if updated == 0:
+                return {"ok": False, "error": "; ".join(errors) or "eBay parser failed"}
+            return {
+                "ok": True,
+                "markets": updated,
+                "nodes": total_nodes,
+                "errors": errors or None,
+            }
         finally:
             await client.aclose()
 
-    async def _refresh_etsy(self, api_key: str) -> dict[str, Any]:
-        client = build_client(self._proxy)
+    async def _refresh_etsy_parser(self) -> dict[str, Any]:
+        client = make_parser_client(self._proxy)
         try:
-            response = await client.get(
-                ETSY_TAXONOMY_URL,
-                headers={"Accept": "application/json", "x-api-key": api_key},
-                timeout=120.0,
-            )
-            if response.status_code >= 400:
-                raise RuntimeError(f"Etsy taxonomy HTTP {response.status_code}")
-            payload = response.json()
-            roots = payload.get("results") or payload.get("nodes") or []
-            nodes = _flatten_etsy_nodes(roots)
+            nodes = await crawl_etsy_categories(client, proxy=self._proxy)
             self._save(
                 "etsy",
                 {
                     "source": "etsy",
                     "marketplace": None,
                     "updated_at": _utcnow(),
+                    "method": "parser",
                     "nodes": nodes,
                 },
             )
@@ -368,21 +364,17 @@ class TaxonomyService:
         finally:
             await client.aclose()
 
-    async def _refresh_poshmark(self) -> dict[str, Any]:
-        client = build_client(self._proxy)
+    async def _refresh_poshmark_parser(self) -> dict[str, Any]:
+        client = make_parser_client(self._proxy)
         try:
-            nodes = await _fetch_poshmark_nodes(client)
-            if len(nodes) < 20:
-                # слишком мало — оставить seed/текущий
-                current = self._load("poshmark") or self._seed_tree("poshmark")
-                nodes = list(current.get("nodes") or [])
-                return {"ok": False, "error": "Poshmark вернул слишком мало категорий", "nodes": len(nodes)}
+            nodes = await crawl_poshmark_categories(client)
             self._save(
                 "poshmark",
                 {
                     "source": "poshmark",
                     "marketplace": None,
                     "updated_at": _utcnow(),
+                    "method": "parser",
                     "nodes": nodes,
                 },
             )
@@ -406,208 +398,7 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-async def _ebay_app_token(client: httpx.AsyncClient, client_id: str, client_secret: str) -> str:
-    credentials = b64encode(f"{client_id}:{client_secret}".encode()).decode()
-    response = await client.post(
-        "https://api.ebay.com/identity/v1/oauth2/token",
-        headers={
-            "Authorization": f"Basic {credentials}",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        data={"grant_type": "client_credentials", "scope": EBAY_OAUTH_SCOPE},
-        timeout=60.0,
-    )
-    if response.status_code >= 400:
-        raise RuntimeError(f"eBay OAuth HTTP {response.status_code}")
-    return str(response.json()["access_token"])
-
-
-async def _ebay_default_tree_id(
-    client: httpx.AsyncClient, token: str, marketplace: str
-) -> str:
-    response = await client.get(
-        "https://api.ebay.com/commerce/taxonomy/v1/get_default_category_tree_id",
-        params={"marketplace_id": marketplace},
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=60.0,
-    )
-    if response.status_code >= 400:
-        raise RuntimeError(f"eBay tree id HTTP {response.status_code} for {marketplace}")
-    return str(response.json()["categoryTreeId"])
-
-
-async def _ebay_flatten_tree(
-    client: httpx.AsyncClient, token: str, tree_id: str
-) -> list[dict[str, Any]]:
-    response = await client.get(
-        f"https://api.ebay.com/commerce/taxonomy/v1/category_tree/{tree_id}",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept-Encoding": "gzip",
-        },
-        timeout=180.0,
-    )
-    if response.status_code >= 400:
-        raise RuntimeError(f"eBay category tree HTTP {response.status_code}")
-    root = response.json().get("rootCategoryNode") or {}
-    nodes: list[dict[str, Any]] = []
-
-    def walk(node: dict[str, Any], parent_id: str | None, path_prefix: str) -> None:
-        category = node.get("category") or {}
-        category_id = str(category.get("categoryId") or "")
-        name = str(category.get("categoryName") or "").strip()
-        if not category_id or not name:
-            return
-        path = f"{path_prefix} > {name}" if path_prefix else name
-        children = list(node.get("childCategoryTreeNodes") or [])
-        nodes.append(
-            {
-                "id": category_id,
-                "name": name,
-                "path": path,
-                "parent_id": parent_id,
-                "has_children": bool(children),
-                "meta": {"category_id": category_id},
-            }
-        )
-        for child in children:
-            walk(child, category_id, path)
-
-    # eBay root often is placeholder — walk children as top-level if name is generic
-    root_cat = root.get("category") or {}
-    root_name = str(root_cat.get("categoryName") or "")
-    root_id = str(root_cat.get("categoryId") or "")
-    children = list(root.get("childCategoryTreeNodes") or [])
-    if root_name.lower() in {"root", "ebay", ""} and children:
-        for child in children:
-            walk(child, None, "")
-    elif root_id:
-        walk(root, None, "")
-    return nodes
-
-
-def _flatten_etsy_nodes(roots: list[Any], parent_id: str | None = None, path_prefix: str = "") -> list[dict[str, Any]]:
-    nodes: list[dict[str, Any]] = []
-    for item in roots:
-        if not isinstance(item, dict):
-            continue
-        raw_id = item.get("id") or item.get("taxonomy_id")
-        name = str(item.get("name") or "").strip()
-        if raw_id is None or not name:
-            continue
-        node_id = str(raw_id)
-        path = f"{path_prefix} > {name}" if path_prefix else name
-        children = list(item.get("children") or [])
-        nodes.append(
-            {
-                "id": node_id,
-                "name": name,
-                "path": path,
-                "parent_id": parent_id,
-                "has_children": bool(children),
-                "meta": {"taxonomy_id": int(raw_id)},
-            }
-        )
-        if children:
-            nodes.extend(_flatten_etsy_nodes(children, parent_id=node_id, path_prefix=path))
-    return nodes
-
-
-async def _fetch_poshmark_nodes(client: httpx.AsyncClient) -> list[dict[str, Any]]:
-    """Собирает дерево из публичных category URL Poshmark."""
-    response = await client.get(
-        "https://poshmark.com/",
-        headers={"Accept": "text/html"},
-        timeout=60.0,
-    )
-    if response.status_code >= 400:
-        raise RuntimeError(f"Poshmark home HTTP {response.status_code}")
-    hrefs = set(re.findall(r'href="(/category/[^"?#]+)"', response.text))
-    # также иногда в JSON
-    hrefs.update(re.findall(r'"(/category/[^"?#]+)"', response.text))
-    nodes_map: dict[str, dict[str, Any]] = {}
-
-    def ensure(
-        node_id: str,
-        *,
-        name: str,
-        path: str,
-        parent_id: str | None,
-        meta: dict[str, Any],
-    ) -> None:
-        existing = nodes_map.get(node_id)
-        if existing is None:
-            nodes_map[node_id] = {
-                "id": node_id,
-                "name": name,
-                "path": path,
-                "parent_id": parent_id,
-                "has_children": False,
-                "meta": meta,
-            }
-            return
-        # keep longer path/name if needed
-        if len(path) > len(str(existing.get("path") or "")):
-            existing["path"] = path
-            existing["name"] = name
-
-    for href in sorted(hrefs):
-        slug = unquote(href.split("/category/", 1)[-1]).strip("/")
-        if not slug:
-            continue
-        parts = [part for part in slug.split("-") if part]
-        # Poshmark encodes spaces as underscores inside segments joined by '-'
-        # e.g. Women-Bags-Crossbody_Bags → Women / Bags / Crossbody Bags
-        labels = [part.replace("_", " ").strip() for part in parts if part.replace("_", " ").strip()]
-        if not labels:
-            continue
-        department = labels[0]
-        category = labels[1] if len(labels) > 1 else None
-        subcategory = labels[2] if len(labels) > 2 else None
-        # department
-        dep_id = f"d:{department}"
-        ensure(
-            dep_id,
-            name=department,
-            path=department,
-            parent_id=None,
-            meta={"department": department},
-        )
-        parent = dep_id
-        path = department
-        if category:
-            cat_id = f"c:{department}|{category}"
-            path = f"{department} > {category}"
-            ensure(
-                cat_id,
-                name=category,
-                path=path,
-                parent_id=dep_id,
-                meta={"department": department, "category": category},
-            )
-            nodes_map[dep_id]["has_children"] = True
-            parent = cat_id
-        if subcategory:
-            sub_id = f"s:{department}|{category}|{subcategory}"
-            path = f"{department} > {category} > {subcategory}"
-            ensure(
-                sub_id,
-                name=subcategory,
-                path=path,
-                parent_id=parent,
-                meta={
-                    "department": department,
-                    "category": category,
-                    "subcategory": subcategory,
-                },
-            )
-            nodes_map[parent]["has_children"] = True
-
-    return list(nodes_map.values())
-
-
 def _ebay_seed_nodes() -> list[dict[str, Any]]:
-    # Основные корни eBay US + популярные ветки (полный каталог — через refresh).
     roots = [
         ("1", "Collectibles"),
         ("220", "Toys & Hobbies"),
