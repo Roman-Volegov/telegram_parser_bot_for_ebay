@@ -62,7 +62,10 @@
             <input id="create-bin" type="checkbox" checked />
             Только Buy It Now (eBay)
           </label>
-          <button id="btn-create-categories" class="chip" type="button">Категории · не заданы</button>
+          <div class="category-cta">
+            <button id="btn-create-categories" class="primary" type="button">Категории · не заданы</button>
+            <p class="hint">Отдельный экран: несколько категорий на источник, поиск и дерево.</p>
+          </div>
           <button class="primary" type="submit">Создать поиск</button>
         </form>
       </section>
@@ -182,7 +185,7 @@
           <input id="edit-bin" type="checkbox" />
           Только Buy It Now (eBay)
         </label>
-        <button id="btn-edit-categories" class="chip" type="button">Категории · не заданы</button>
+        <button id="btn-edit-categories" class="primary" type="button">Категории · не заданы</button>
         <div class="actions">
           <button class="primary" type="submit">Сохранить</button>
           <button class="chip" id="btn-edit-cancel" type="button">Отмена</button>

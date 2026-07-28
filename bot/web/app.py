@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from bot.db import Database
@@ -17,6 +17,20 @@ from bot.web.etsy_access import create_etsy_access_router
 from bot.web.rate_limit import RateLimitMiddleware
 
 WEBAPP_DIR = Path(__file__).resolve().parents[2] / "webapp"
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
+def _webapp_asset_version() -> str:
+    stamps: list[int] = []
+    for name in ("app.js", "styles.css", "index.html"):
+        path = WEBAPP_DIR / name
+        if path.exists():
+            stamps.append(path.stat().st_mtime_ns)
+    return str(max(stamps) if stamps else 0)
 
 
 def create_app(
@@ -81,17 +95,32 @@ def create_app(
         @app.get("/app")
         @app.get("/app/")
         async def miniapp_index():
-            return FileResponse(WEBAPP_DIR / "index.html")
+            html = (WEBAPP_DIR / "index.html").read_text(encoding="utf-8")
+            version = _webapp_asset_version()
+            html = html.replace(
+                'href="/app/styles.css"',
+                f'href="/app/styles.css?v={version}"',
+            )
+            html = html.replace(
+                'src="/app/app.js"',
+                f'src="/app/app.js?v={version}"',
+            )
+            return HTMLResponse(content=html, headers=dict(NO_CACHE_HEADERS))
 
         @app.get("/app/styles.css")
         async def miniapp_css():
-            return FileResponse(WEBAPP_DIR / "styles.css", media_type="text/css")
+            return FileResponse(
+                WEBAPP_DIR / "styles.css",
+                media_type="text/css",
+                headers=dict(NO_CACHE_HEADERS),
+            )
 
         @app.get("/app/app.js")
         async def miniapp_js():
             return FileResponse(
                 WEBAPP_DIR / "app.js",
                 media_type="application/javascript",
+                headers=dict(NO_CACHE_HEADERS),
             )
 
     return app

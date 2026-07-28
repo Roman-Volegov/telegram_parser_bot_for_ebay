@@ -21,6 +21,18 @@ https://{$MINIAPP_DOMAIN} {
 		reverse_proxy bot:6080
 	}
 
+	handle /app* {
+		header {
+			Referrer-Policy "same-origin"
+			X-Content-Type-Options "nosniff"
+			X-Frame-Options "SAMEORIGIN"
+			Permissions-Policy "camera=(), microphone=(), geolocation=()"
+			Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+			Pragma "no-cache"
+		}
+		reverse_proxy bot:8080
+	}
+
 	handle {
 		header {
 			Referrer-Policy "same-origin"
