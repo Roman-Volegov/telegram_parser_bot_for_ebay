@@ -19,8 +19,10 @@ from bot.models import (
 )
 from bot.providers.ebay_api import EbayApiProvider
 from bot.providers.etsy import EtsyProvider
+from bot.services.categories import categories_for_search, normalize_categories_payload
 from bot.services.credentials import CredentialsService, normalize_etsy_api_key
 from bot.services.poller import PollerService
+from bot.services.taxonomies import TaxonomyService, taxonomy_source_for_api
 from bot.web.deletion import deletion_endpoint
 from bot.web.telegram_auth import TelegramAuthError, validate_init_data
 
@@ -36,6 +38,7 @@ class SearchCreateIn(BaseModel):
     condition: str | None = None
     buy_it_now: bool = True
     marketplace: str | None = None
+    categories: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_sources(self):
@@ -58,6 +61,7 @@ class SearchUpdateIn(BaseModel):
     clear_min_price: bool = False
     clear_max_price: bool = False
     marketplace: str | None = None
+    categories: dict[str, Any] | None = None
 
 
 class SetupIn(BaseModel):
@@ -78,6 +82,7 @@ def create_api_router(
     bot_username: str = "",
     http_proxy: str = "",
     poller: PollerService | None = None,
+    taxonomies: TaxonomyService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api", tags=["miniapp"])
 
@@ -160,6 +165,11 @@ def create_api_router(
             marketplaces = [
                 item.marketplace for item in group if item.marketplace is not None
             ]
+            categories: dict[str, list[dict[str, Any]]] = {}
+            for item in group:
+                cats = categories_for_search(item.filters_json, item.source)
+                if cats:
+                    categories[item.source.value] = cats
             items.append(
                 {
                     "id": representative.id,
@@ -181,6 +191,7 @@ def create_api_router(
                         if marketplaces
                         else None
                     ),
+                    "categories": categories,
                 }
             )
         return {
@@ -259,6 +270,7 @@ def create_api_router(
             condition=payload.condition,
             buy_it_now=payload.buy_it_now,
             marketplace=marketplace,
+            categories_by_source=normalize_categories_payload(payload.categories),
         )
         search = searches[0]
         if poller is not None:
@@ -380,6 +392,12 @@ def create_api_router(
             clear_max_price=payload.clear_prices or payload.clear_max_price,
             clear_min_price=payload.clear_prices or payload.clear_min_price,
             marketplace=marketplace,
+            categories_by_source=(
+                normalize_categories_payload(payload.categories)
+                if payload.categories is not None
+                else None
+            ),
+            update_categories=payload.categories is not None,
         )
         if not updated:
             raise HTTPException(status_code=404, detail="Поиск не найден")
@@ -394,6 +412,7 @@ def create_api_router(
                 payload.clear_prices,
                 payload.clear_min_price,
                 payload.clear_max_price,
+                payload.categories is not None,
             )
         )
         if criteria_changed and poller is not None:
@@ -529,5 +548,81 @@ def create_api_router(
                 setup_completed=bool(remaining) and fresh.setup_completed,
             )
         return {"ok": True, "removed": removed}
+
+    def _require_taxonomies() -> TaxonomyService:
+        if taxonomies is None:
+            raise HTTPException(status_code=503, detail="Сервис категорий недоступен")
+        return taxonomies
+
+    @router.get("/categories/status")
+    async def api_categories_status(
+        user: User = Depends(current_user),
+    ) -> dict[str, Any]:
+        service = _require_taxonomies()
+        return service.status()
+
+    @router.get("/categories/search")
+    async def api_categories_search(
+        source: str,
+        q: str = "",
+        marketplace: str | None = None,
+        limit: int = 30,
+        user: User = Depends(current_user),
+    ) -> dict[str, Any]:
+        service = _require_taxonomies()
+        try:
+            items = await service.search(
+                source=taxonomy_source_for_api(source),
+                q=q,
+                marketplace=marketplace,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"items": items}
+
+    @router.get("/categories")
+    async def api_categories_children(
+        source: str,
+        parent_id: str | None = None,
+        marketplace: str | None = None,
+        user: User = Depends(current_user),
+    ) -> dict[str, Any]:
+        service = _require_taxonomies()
+        try:
+            items = await service.children(
+                source=taxonomy_source_for_api(source),
+                parent_id=parent_id,
+                marketplace=marketplace,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"items": items}
+
+    @router.post("/categories/refresh")
+    async def api_categories_refresh(
+        user: User = Depends(current_user),
+    ) -> dict[str, Any]:
+        service = _require_taxonomies()
+        ebay_id = ""
+        ebay_secret = ""
+        etsy_key = ""
+        try:
+            pair = await credentials.get_ebay_keys(user.telegram_id)
+            if pair:
+                ebay_id, ebay_secret = pair
+        except Exception:
+            logger.debug("No eBay credentials for taxonomy refresh", exc_info=True)
+        try:
+            etsy_key = (await credentials.get_etsy_key(user.telegram_id)) or ""
+        except Exception:
+            logger.debug("No Etsy credentials for taxonomy refresh", exc_info=True)
+        result = await service.refresh(
+            ebay_client_id=ebay_id,
+            ebay_client_secret=ebay_secret,
+            etsy_api_key=etsy_key,
+            force=True,
+        )
+        return result
 
     return router

@@ -62,8 +62,19 @@
             <input id="create-bin" type="checkbox" checked />
             Только Buy It Now (eBay)
           </label>
+          <button id="btn-create-categories" class="chip" type="button">Категории · не заданы</button>
           <button class="primary" type="submit">Создать поиск</button>
         </form>
+      </section>
+
+      <section id="panel-categories" class="panel">
+        <div class="categories-head">
+          <button id="btn-categories-back" class="chip" type="button">← Назад</button>
+          <h2 class="section-title">Категории поиска</h2>
+        </div>
+        <p class="hint">Несколько категорий на источник — через «Добавить». Пусто = все категории. Поиск по названию или дерево.</p>
+        <div id="categories-blocks" class="categories-blocks"></div>
+        <button id="btn-categories-done" class="primary" type="button">Готово</button>
       </section>
 
       <section id="panel-logs" class="panel">
@@ -129,6 +140,13 @@
             <button type="button" class="chip danger" id="btn-revoke-etsy-keys">Удалить Etsy ключ</button>
           </div>
 
+          <div class="ebay-block">
+            <h2 class="section-title">Каталоги категорий</h2>
+            <p class="hint">Автообновление раз в месяц. Можно обновить вручную (нужны ключи eBay/Etsy для полных деревьев).</p>
+            <p id="categories-status" class="hint"></p>
+            <button type="button" class="chip" id="btn-refresh-categories">Обновить каталоги категорий</button>
+          </div>
+
           <button class="primary" type="submit">Сохранить настройки</button>
         </form>
       </section>
@@ -164,11 +182,22 @@
           <input id="edit-bin" type="checkbox" />
           Только Buy It Now (eBay)
         </label>
+        <button id="btn-edit-categories" class="chip" type="button">Категории · не заданы</button>
         <div class="actions">
           <button class="primary" type="submit">Сохранить</button>
           <button class="chip" id="btn-edit-cancel" type="button">Отмена</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="tree-dialog">
+      <div class="tree-dialog-body">
+        <div class="categories-head">
+          <h2 class="section-title" id="tree-dialog-title">Дерево категорий</h2>
+          <button id="btn-tree-close" class="chip" type="button">Закрыть</button>
+        </div>
+        <div id="tree-root" class="category-tree"></div>
+      </div>
     </dialog>
 
     <div id="toast" class="toast hidden"></div>

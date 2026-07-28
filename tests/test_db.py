@@ -241,6 +241,40 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.db.delete_search_group(updated[0].id, 7))
         self.assertEqual(await self.db.get_search_group(updated[0].group_key, 7), [])
 
+    async def test_search_group_stores_categories(self):
+        await self.db.upsert_pending_user(8, None, "Cats")
+        searches = await self.db.add_search_group(
+            8,
+            [Source.EBAY_API, Source.ETSY],
+            "brooch",
+            marketplace="EBAY_US",
+            categories_by_source={
+                "ebay_api": [{"category_id": "11450", "category_path": "Clothing"}],
+                "etsy": [{"taxonomy_id": 10, "category_path": "Jewelry"}],
+            },
+        )
+        ebay = next(item for item in searches if item.source is Source.EBAY_API)
+        etsy = next(item for item in searches if item.source is Source.ETSY)
+        self.assertEqual(ebay.filters_json["categories"][0]["category_id"], "11450")
+        self.assertEqual(etsy.filters_json["categories"][0]["taxonomy_id"], 10)
+
+        updated = await self.db.update_search_group(
+            searches[0].id,
+            8,
+            categories_by_source={
+                "ebay_api": [
+                    {"category_id": "11450", "category_path": "Clothing"},
+                    {"category_id": "281", "category_path": "Jewelry"},
+                ],
+                "etsy": [],
+            },
+            update_categories=True,
+        )
+        ebay2 = next(item for item in updated if item.source is Source.EBAY_API)
+        etsy2 = next(item for item in updated if item.source is Source.ETSY)
+        self.assertEqual(len(ebay2.filters_json["categories"]), 2)
+        self.assertNotIn("categories", etsy2.filters_json)
+
 
 if __name__ == "__main__":
     unittest.main()

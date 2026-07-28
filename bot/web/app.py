@@ -10,6 +10,7 @@ from bot.db import Database
 from bot.services.credentials import CredentialsService
 from bot.services.etsy_access import EtsyVncAccess
 from bot.services.poller import PollerService
+from bot.services.taxonomies import TaxonomyService
 from bot.web.api import create_api_router
 from bot.web.deletion import create_deletion_router
 from bot.web.etsy_access import create_etsy_access_router
@@ -28,6 +29,7 @@ def create_app(
     poller: PollerService | None = None,
     http_proxy: str = "",
     etsy_vnc_access: EtsyVncAccess | None = None,
+    taxonomies: TaxonomyService | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DecoParser web", docs_url=None, redoc_url=None)
     app.add_middleware(RateLimitMiddleware)
@@ -43,6 +45,7 @@ def create_app(
             bot_username=bot_username,
             http_proxy=http_proxy,
             poller=poller,
+            taxonomies=taxonomies,
         )
     )
 

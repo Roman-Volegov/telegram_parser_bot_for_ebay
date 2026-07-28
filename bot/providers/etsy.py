@@ -44,15 +44,31 @@ class EtsyProvider(BaseProvider):
         await self._client.aclose()
 
     async def search(self, search: Search, *, limit: int = 20) -> list[Listing]:
+        from bot.services.categories import categories_for_search, merge_listings_by_id
+
         query = search.keywords.strip()
         if not query:
             return []
+        categories = categories_for_search(search.filters_json, self.source)
         # Open API — только если ключ реально есть; иначе Playwright (обход DataDome)
         if self._api_key:
-            return await self._search_via_api(search, limit=limit)
-        return await self._search_via_playwright(search, limit=limit)
+            search_once = self._search_via_api
+        else:
+            search_once = self._search_via_playwright
+        if not categories:
+            return await search_once(search, limit=limit, category=None)
+        batches: list[list[Listing]] = []
+        for category in categories:
+            batches.append(await search_once(search, limit=limit, category=category))
+        return merge_listings_by_id(batches, limit=limit)
 
-    async def _search_via_api(self, search: Search, *, limit: int) -> list[Listing]:
+    async def _search_via_api(
+        self,
+        search: Search,
+        *,
+        limit: int,
+        category: dict | None = None,
+    ) -> list[Listing]:
         params: dict[str, str | int | float] = {
             "keywords": search.keywords.strip(),
             "limit": min(max(limit, 1), 100),
@@ -64,6 +80,8 @@ class EtsyProvider(BaseProvider):
             params["min_price"] = search.min_price
         if search.max_price is not None:
             params["max_price"] = search.max_price
+        if category and category.get("taxonomy_id") is not None:
+            params["taxonomy_id"] = int(category["taxonomy_id"])
         url = f"{ETSY_OPENAPI_BASE}/listings/active"
         try:
             response = await self._client.get(
@@ -119,7 +137,7 @@ class EtsyProvider(BaseProvider):
             detail = _api_error_detail(response)
             raise ProviderError(f"Etsy API HTTP {response.status_code}: {detail}")
 
-    def _search_url(self, search: Search) -> str:
+    def _search_url(self, search: Search, *, category: dict | None = None) -> str:
         params: dict[str, str] = {
             "q": search.keywords.strip(),
             "order": "date_desc",
@@ -129,11 +147,19 @@ class EtsyProvider(BaseProvider):
             params["min"] = str(search.min_price)
         if search.max_price is not None:
             params["max"] = str(search.max_price)
+        if category and category.get("taxonomy_id") is not None:
+            params["taxonomy_id"] = str(category["taxonomy_id"])
         return f"https://www.etsy.com/search?{urlencode(params)}"
 
-    async def _search_via_playwright(self, search: Search, *, limit: int) -> list[Listing]:
+    async def _search_via_playwright(
+        self,
+        search: Search,
+        *,
+        limit: int,
+        category: dict | None = None,
+    ) -> list[Listing]:
         """Загрузка выдачи через постоянный профиль Playwright."""
-        url = self._search_url(search)
+        url = self._search_url(search, category=category)
         try:
             html = await fetch_search_html(url, proxy=self._proxy)
         except Exception as exc:

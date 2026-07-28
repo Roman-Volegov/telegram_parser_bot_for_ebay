@@ -520,7 +520,10 @@ class Database:
         filters_json: dict[str, Any] | None = None,
         marketplace: str | None = None,
         group_key: str | None = None,
+        categories_by_source: dict[str, list[dict[str, Any]]] | None = None,
     ) -> list[Search]:
+        from bot.services.categories import apply_categories_to_filters
+
         if not sources:
             raise ValueError("At least one source is required")
         unique_sources = list(dict.fromkeys(sources))
@@ -535,6 +538,11 @@ class Database:
                 source_buy_it_now = False
             elif marketplace:
                 filters["marketplace"] = marketplace
+            filters = apply_categories_to_filters(
+                filters,
+                source=source,
+                categories_by_source=categories_by_source,
+            )
             rows.append(
                 (
                     telegram_id,
@@ -697,7 +705,15 @@ class Database:
         clear_max_price: bool = False,
         clear_min_price: bool = False,
         marketplace: str | None = None,
+        categories_by_source: dict[str, list[dict[str, Any]]] | None = None,
+        update_categories: bool = False,
     ) -> list[Search]:
+        from bot.services.categories import (
+            apply_categories_to_filters,
+            categories_equal,
+            categories_for_search,
+        )
+
         group = await self.get_search_group_by_id(search_id, telegram_id)
         if not group:
             return []
@@ -714,6 +730,24 @@ class Database:
         )
         new_condition = condition if condition is not None else base.condition
         new_bin = base.buy_it_now if buy_it_now is None else buy_it_now
+        categories_changed = False
+        if update_categories:
+            for source in target_sources:
+                existing = next((item for item in group if item.source is source), None)
+                old_cats = (
+                    categories_for_search(existing.filters_json, source)
+                    if existing is not None
+                    else []
+                )
+                new_filters = apply_categories_to_filters(
+                    {},
+                    source=source,
+                    categories_by_source=categories_by_source or {},
+                )
+                new_cats = categories_for_search(new_filters, source)
+                if not categories_equal(old_cats, new_cats, source=source):
+                    categories_changed = True
+                    break
         criteria_changed = any(
             (
                 keywords is not None,
@@ -723,6 +757,7 @@ class Database:
                 buy_it_now is not None,
                 clear_max_price,
                 clear_min_price,
+                categories_changed,
             )
         )
         now = _utcnow()
@@ -759,6 +794,12 @@ class Database:
                 source_bin = False
             elif marketplace:
                 filters["marketplace"] = marketplace
+            if update_categories:
+                filters = apply_categories_to_filters(
+                    filters,
+                    source=source,
+                    categories_by_source=categories_by_source or {},
+                )
             await self.conn.execute(
                 """
                 UPDATE searches
@@ -777,6 +818,12 @@ class Database:
                 source_bin = False
             elif marketplace:
                 filters["marketplace"] = marketplace
+            if update_categories:
+                filters = apply_categories_to_filters(
+                    filters,
+                    source=source,
+                    categories_by_source=categories_by_source or {},
+                )
             await self.conn.execute(
                 """
                 INSERT INTO searches (

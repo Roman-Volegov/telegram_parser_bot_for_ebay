@@ -65,23 +65,41 @@ class EbayApiProvider(BaseProvider):
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def verify_credentials(self) -> str:
-        return await self._get_token(force=True)
-
     async def search(self, search: Search, *, limit: int = 20) -> list[Listing]:
+        from bot.services.categories import categories_for_search, merge_listings_by_id
+
         try:
             token = await self._get_token()
-            items = await self._search_summaries(token, search, limit=limit)
-            semaphore = asyncio.Semaphore(6)
+            categories = categories_for_search(search.filters_json, self.source)
+            if not categories:
+                items = await self._search_summaries(
+                    token, search, limit=limit, category_id=None
+                )
+                return await self._convert_items(token, items)
 
-            async def convert(item: dict) -> Listing | None:
-                async with semaphore:
-                    return await self._to_listing(token, item)
-
-            converted = await asyncio.gather(*(convert(item) for item in items))
-            return [listing for listing in converted if listing is not None]
+            batches: list[list[Listing]] = []
+            for category in categories:
+                category_id = str(category.get("category_id") or "")
+                items = await self._search_summaries(
+                    token, search, limit=limit, category_id=category_id or None
+                )
+                batches.append(await self._convert_items(token, items))
+            return merge_listings_by_id(batches, limit=limit)
         except httpx.HTTPError as exc:
             raise ProviderError(f"eBay API request failed: {exc}") from exc
+
+    async def _convert_items(self, token: str, items: list[dict]) -> list[Listing]:
+        semaphore = asyncio.Semaphore(6)
+
+        async def convert(item: dict) -> Listing | None:
+            async with semaphore:
+                return await self._to_listing(token, item)
+
+        converted = await asyncio.gather(*(convert(item) for item in items))
+        return [listing for listing in converted if listing is not None]
+
+    async def verify_credentials(self) -> str:
+        return await self._get_token(force=True)
 
     async def _get_token(self, *, force: bool = False) -> str:
         if not force:
@@ -110,7 +128,12 @@ class EbayApiProvider(BaseProvider):
         return token
 
     async def _search_summaries(
-        self, token: str, search: Search, *, limit: int
+        self,
+        token: str,
+        search: Search,
+        *,
+        limit: int,
+        category_id: str | None = None,
     ) -> list[dict]:
         filters: list[str] = []
         if search.min_price is not None:
@@ -123,6 +146,8 @@ class EbayApiProvider(BaseProvider):
             filters.append("buyingOptions:{FIXED_PRICE}")
         if search.condition:
             filters.append(f"conditions:{{{search.condition}}}")
+        if category_id:
+            filters.append(f"categoryIds:{{{category_id}}}")
 
         params: dict[str, str | int] = {
             "q": search.keywords,

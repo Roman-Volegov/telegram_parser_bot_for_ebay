@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from pathlib import Path
 
 import uvicorn
 from aiogram import Bot, Dispatcher
@@ -21,6 +22,7 @@ from bot.services.cleanup import CleanupService
 from bot.services.credentials import CredentialsService
 from bot.services.etsy_access import EtsyVncAccess
 from bot.services.poller import PollerService
+from bot.services.taxonomies import TaxonomyService
 from bot.web.app import create_app
 
 
@@ -71,6 +73,11 @@ async def main() -> None:
         etsy_captcha_notify_ids=settings.admin_ids,
     )
     cleanup = CleanupService(db, ttl_days=settings.seen_items_ttl_days)
+    taxonomy_dir = Path(settings.database_path).resolve().parent / "taxonomies"
+    taxonomies = TaxonomyService(
+        taxonomy_dir,
+        proxy=settings.http_proxy or None,
+    )
 
     dp.update.middleware(InjectMiddleware(
         db=db,
@@ -90,6 +97,7 @@ async def main() -> None:
         poller=poller,
         http_proxy=settings.http_proxy,
         etsy_vnc_access=etsy_vnc_access,
+        taxonomies=taxonomies,
     )
     config = uvicorn.Config(
         app,
@@ -105,6 +113,7 @@ async def main() -> None:
 
     poller.start()
     cleanup.start()
+    taxonomies.start()
     webapp_url = webapp_url_from_base(settings.public_base_url)
     await setup_bot_commands(bot, settings.admin_ids, webapp_url=webapp_url)
     logger.info(
@@ -123,6 +132,7 @@ async def main() -> None:
     finally:
         await poller.stop()
         await cleanup.stop()
+        await taxonomies.aclose()
         try:
             from bot.providers.etsy_browser import close_browser
 

@@ -36,7 +36,9 @@ class EbayParserProvider(BaseProvider):
         market = search.marketplace or "EBAY_US"
         return EBAY_MARKETPLACE_HOSTS.get(market, "www.ebay.com")
 
-    def _build_params(self, search: Search) -> dict[str, str]:
+    def _build_params(
+        self, search: Search, *, category_id: str | None = None
+    ) -> dict[str, str]:
         params: dict[str, str] = {
             "_nkw": search.keywords,
             "_sop": "10",  # newly listed
@@ -50,6 +52,8 @@ class EbayParserProvider(BaseProvider):
         if search.condition:
             # eBay condition IDs often passed as LH_ItemCondition
             params["LH_ItemCondition"] = search.condition
+        if category_id:
+            params["_sacat"] = category_id
         return params
 
     async def _warmup(self, host: str = "www.ebay.com") -> None:
@@ -69,20 +73,55 @@ class EbayParserProvider(BaseProvider):
                 logger.debug("eBay warmup failed: %s", exc)
 
     async def search(self, search: Search, *, limit: int = 20) -> list[Listing]:
+        from bot.services.categories import categories_for_search, merge_listings_by_id
+
         try:
             host = self._host_for(search)
             await self._warmup(host)
-            # eBay часто отдаёт HTML вместо RSS на _rss=1 — сначала HTML.
-            listings = await self._search_html(search, host=host, limit=limit)
-            if listings:
-                return listings
-            logger.info("eBay HTML empty for %r, trying RSS", search.keywords)
-            return await self._search_rss(search, host=host, limit=limit)
+            categories = categories_for_search(search.filters_json, self.source)
+            if not categories:
+                return await self._search_with_category(
+                    search, host=host, limit=limit, category_id=None
+                )
+            batches: list[list[Listing]] = []
+            for category in categories:
+                category_id = str(category.get("category_id") or "") or None
+                batches.append(
+                    await self._search_with_category(
+                        search, host=host, limit=limit, category_id=category_id
+                    )
+                )
+            return merge_listings_by_id(batches, limit=limit)
         except Exception as exc:
             raise ProviderError(f"eBay parser failed: {exc}") from exc
 
-    async def _search_rss(self, search: Search, *, host: str, limit: int) -> list[Listing]:
-        params = self._build_params(search)
+    async def _search_with_category(
+        self,
+        search: Search,
+        *,
+        host: str,
+        limit: int,
+        category_id: str | None,
+    ) -> list[Listing]:
+        listings = await self._search_html(
+            search, host=host, limit=limit, category_id=category_id
+        )
+        if listings:
+            return listings
+        logger.info("eBay HTML empty for %r, trying RSS", search.keywords)
+        return await self._search_rss(
+            search, host=host, limit=limit, category_id=category_id
+        )
+
+    async def _search_rss(
+        self,
+        search: Search,
+        *,
+        host: str,
+        limit: int,
+        category_id: str | None = None,
+    ) -> list[Listing]:
+        params = self._build_params(search, category_id=category_id)
         params["_rss"] = "1"
         url = f"https://{host}/sch/i.html?{urlencode(params)}"
         response = await request_with_retries(
@@ -135,8 +174,15 @@ class EbayParserProvider(BaseProvider):
             )
         return listings
 
-    async def _search_html(self, search: Search, *, host: str, limit: int) -> list[Listing]:
-        params = self._build_params(search)
+    async def _search_html(
+        self,
+        search: Search,
+        *,
+        host: str,
+        limit: int,
+        category_id: str | None = None,
+    ) -> list[Listing]:
+        params = self._build_params(search, category_id=category_id)
         params["_ipg"] = str(min(max(limit, 20), 60))
         url = f"https://{host}/sch/i.html?{urlencode(params)}"
         response = await request_with_retries(

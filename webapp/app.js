@@ -15,6 +15,10 @@
     me: null,
     searches: [],
     logs: [],
+    categoryDraft: emptyCategoryDraft(),
+    categoriesReturnTo: "create",
+    categoriesContext: "create",
+    treeTarget: null,
   };
 
   const STATUS_LABELS = {
@@ -23,6 +27,8 @@
     empty: "пусто",
     error: "ошибка",
   };
+
+  const MAX_CATEGORIES = 10;
 
   const els = {
     greeting: document.getElementById("greeting"),
@@ -34,6 +40,8 @@
     createMarketplace: document.getElementById("create-marketplace"),
     createMarketplaceWrap: document.getElementById("create-marketplace-wrap"),
     createBinWrap: document.getElementById("create-bin-wrap"),
+    btnCreateCategories: document.getElementById("btn-create-categories"),
+    categoriesBlocks: document.getElementById("categories-blocks"),
     sourcesBox: document.getElementById("sources-box"),
     marketplace: document.getElementById("ebay-marketplace"),
     keysStatus: document.getElementById("keys-status"),
@@ -46,6 +54,7 @@
     etsyKeystring: document.getElementById("etsy-keystring"),
     etsySharedSecret: document.getElementById("etsy-shared-secret"),
     etsyKeysStatus: document.getElementById("etsy-keys-status"),
+    categoriesStatus: document.getElementById("categories-status"),
     deletionBox: document.getElementById("deletion-box"),
     deletionUrl: document.getElementById("deletion-url"),
     deletionToken: document.getElementById("deletion-token"),
@@ -63,7 +72,15 @@
     editMarketplaceWrap: document.getElementById("edit-marketplace-wrap"),
     editBin: document.getElementById("edit-bin"),
     editBinWrap: document.getElementById("edit-bin-wrap"),
+    btnEditCategories: document.getElementById("btn-edit-categories"),
+    treeDialog: document.getElementById("tree-dialog"),
+    treeRoot: document.getElementById("tree-root"),
+    treeDialogTitle: document.getElementById("tree-dialog-title"),
   };
+
+  function emptyCategoryDraft() {
+    return { ebay: [], etsy: [], poshmark: [] };
+  }
 
   function initData() {
     return (tg?.initData || "").trim();
@@ -115,8 +132,16 @@
     if (name === "settings") {
       syncEbayBlockVisibility();
       syncEtsyBlockVisibility();
+      loadCategoriesStatus().catch(() => {});
     }
     if (name === "logs") loadLogs().catch((err) => toast(err.message));
+    if (name === "create") {
+      if (state.categoriesContext !== "create") {
+        state.categoryDraft = emptyCategoryDraft();
+        state.categoriesContext = "create";
+      }
+      syncCategoryButtons();
+    }
   }
 
   function selectedSources() {
@@ -125,6 +150,400 @@
 
   function selectedSearchSources(container) {
     return [...container.querySelectorAll("input:checked")].map((el) => el.value);
+  }
+
+  function isEbaySource(source) {
+    return source === "ebay_api" || source === "ebay_parser";
+  }
+
+  function categoryBlocksForSources(sources) {
+    const blocks = [];
+    if (sources.some(isEbaySource)) blocks.push("ebay");
+    if (sources.includes("etsy")) blocks.push("etsy");
+    if (sources.includes("poshmark")) blocks.push("poshmark");
+    return blocks;
+  }
+
+  function draftSummary(draft, sources) {
+    const bits = [];
+    categoryBlocksForSources(sources).forEach((block) => {
+      const count = (draft[block] || []).filter((item) => item && item.category_path).length;
+      if (count) {
+        const label = block === "ebay" ? "eBay" : block === "etsy" ? "Etsy" : "Poshmark";
+        bits.push(`${label}: ${count}`);
+      }
+    });
+    return bits.length ? bits.join(" · ") : "не заданы";
+  }
+
+  function syncCategoryButtons() {
+    const createSources = selectedSearchSources(els.createSources);
+    els.btnCreateCategories.textContent = `Категории · ${draftSummary(
+      state.categoryDraft,
+      createSources,
+    )}`;
+    els.btnCreateCategories.disabled = !createSources.length;
+    const editSources = selectedSearchSources(els.editSources);
+    if (els.btnEditCategories) {
+      els.btnEditCategories.textContent = `Категории · ${draftSummary(
+        state.categoryDraft,
+        editSources,
+      )}`;
+      els.btnEditCategories.disabled = !editSources.length;
+    }
+  }
+
+  function categoriesPayloadFromDraft(sources) {
+    const payload = {};
+    const blocks = categoryBlocksForSources(sources);
+    if (blocks.includes("ebay")) {
+      const items = (state.categoryDraft.ebay || [])
+        .filter((item) => item && item.category_id)
+        .map((item) => ({
+          category_id: item.category_id,
+          category_path: item.category_path || "",
+        }));
+      if (sources.includes("ebay_api")) payload.ebay_api = items;
+      if (sources.includes("ebay_parser")) payload.ebay_parser = items;
+    }
+    if (blocks.includes("etsy") && sources.includes("etsy")) {
+      payload.etsy = (state.categoryDraft.etsy || [])
+        .filter((item) => item && item.taxonomy_id != null)
+        .map((item) => ({
+          taxonomy_id: item.taxonomy_id,
+          category_path: item.category_path || "",
+        }));
+    }
+    if (blocks.includes("poshmark") && sources.includes("poshmark")) {
+      payload.poshmark = (state.categoryDraft.poshmark || [])
+        .filter((item) => item && item.department)
+        .map((item) => ({
+          department: item.department,
+          category: item.category || null,
+          subcategory: item.subcategory || null,
+          category_path: item.category_path || item.department,
+        }));
+    }
+    return payload;
+  }
+
+  function hydrateDraftFromCategories(categories) {
+    const draft = emptyCategoryDraft();
+    const raw = categories || {};
+    const ebayItems = raw.ebay_api || raw.ebay_parser || raw.ebay || [];
+    draft.ebay = ebayItems.map((item) => ({
+      category_id: item.category_id,
+      category_path: item.category_path || "",
+    }));
+    draft.etsy = (raw.etsy || []).map((item) => ({
+      taxonomy_id: item.taxonomy_id,
+      category_path: item.category_path || "",
+    }));
+    draft.poshmark = (raw.poshmark || []).map((item) => ({
+      department: item.department,
+      category: item.category || null,
+      subcategory: item.subcategory || null,
+      category_path: item.category_path || item.department,
+    }));
+    return draft;
+  }
+
+  function currentMarketplace() {
+    if (state.categoriesContext === "edit") {
+      return els.editMarketplace.value || state.me?.ebay_marketplace || "EBAY_US";
+    }
+    return els.createMarketplace.value || state.me?.ebay_marketplace || "EBAY_US";
+  }
+
+  function openCategoriesPage(context) {
+    state.categoriesContext = context;
+    state.categoriesReturnTo = context === "edit" ? "edit" : "create";
+    const sources =
+      context === "edit"
+        ? selectedSearchSources(els.editSources)
+        : selectedSearchSources(els.createSources);
+    if (!sources.length) {
+      toast("Сначала выберите источники");
+      return;
+    }
+    if (context === "edit") {
+      els.editDialog.close();
+    }
+    renderCategoriesPage(sources);
+    switchTab("categories");
+  }
+
+  function leaveCategoriesPage() {
+    syncCategoryButtons();
+    if (state.categoriesReturnTo === "edit") {
+      switchTab("searches");
+      els.editDialog.showModal();
+      return;
+    }
+    switchTab("create");
+  }
+
+  function renderCategoriesPage(sources) {
+    const blocks = categoryBlocksForSources(sources);
+    const labels = {
+      ebay: "eBay",
+      etsy: "Etsy",
+      poshmark: "Poshmark",
+    };
+    els.categoriesBlocks.innerHTML = "";
+    blocks.forEach((block) => {
+      if (!Array.isArray(state.categoryDraft[block]) || !state.categoryDraft[block].length) {
+        state.categoryDraft[block] = [{}];
+      }
+      const section = document.createElement("section");
+      section.className = "category-source-block";
+      section.dataset.block = block;
+      section.innerHTML = `<h3>${labels[block]}</h3><div class="category-rows"></div>`;
+      const rows = section.querySelector(".category-rows");
+      state.categoryDraft[block].forEach((item, index) => {
+        rows.appendChild(buildCategoryRow(block, index, item));
+      });
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "chip";
+      addBtn.textContent = "Добавить";
+      addBtn.addEventListener("click", () => {
+        if ((state.categoryDraft[block] || []).length >= MAX_CATEGORIES) {
+          toast(`Не больше ${MAX_CATEGORIES} категорий на источник`);
+          return;
+        }
+        state.categoryDraft[block].push({});
+        renderCategoriesPage(sources);
+      });
+      section.appendChild(addBtn);
+      els.categoriesBlocks.appendChild(section);
+    });
+  }
+
+  function buildCategoryRow(block, index, item) {
+    const row = document.createElement("div");
+    row.className = "category-row";
+    const wrap = document.createElement("div");
+    wrap.className = "category-input-wrap";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = "Начните вводить категорию…";
+    input.value = item.category_path || "";
+    input.autocomplete = "off";
+    const suggest = document.createElement("div");
+    suggest.className = "suggest-list hidden";
+    wrap.appendChild(input);
+    wrap.appendChild(suggest);
+
+    const treeBtn = document.createElement("button");
+    treeBtn.type = "button";
+    treeBtn.className = "tree-btn";
+    treeBtn.title = "Дерево категорий";
+    treeBtn.setAttribute("aria-label", "Дерево категорий");
+    treeBtn.textContent = "🌳";
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "category-remove";
+    removeBtn.title = "Удалить";
+    removeBtn.textContent = "×";
+
+    let timer = null;
+    input.addEventListener("input", () => {
+      clearTimeout(timer);
+      const value = input.value.trim();
+      if (!value) {
+        state.categoryDraft[block][index] = {};
+        suggest.classList.add("hidden");
+        suggest.innerHTML = "";
+        syncCategoryButtons();
+        return;
+      }
+      // частичный ввод — ещё не выбран узел
+      if (state.categoryDraft[block][index]?.category_path !== value) {
+        state.categoryDraft[block][index] = {
+          ...(state.categoryDraft[block][index] || {}),
+          category_path: value,
+        };
+      }
+      timer = setTimeout(async () => {
+        try {
+          const source = block === "ebay" ? "ebay_api" : block;
+          const params = new URLSearchParams({
+            source,
+            q: value,
+            limit: "30",
+          });
+          if (block === "ebay") params.set("marketplace", currentMarketplace());
+          const data = await api(`/categories/search?${params.toString()}`);
+          const items = data.items || [];
+          suggest.innerHTML = "";
+          if (!items.length) {
+            suggest.classList.add("hidden");
+            return;
+          }
+          items.forEach((node) => {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "suggest-item";
+            btn.textContent = node.path || node.name;
+            btn.addEventListener("click", () => {
+              applyCategorySelection(block, index, node);
+              input.value = node.path || node.name || "";
+              suggest.classList.add("hidden");
+              syncCategoryButtons();
+            });
+            suggest.appendChild(btn);
+          });
+          suggest.classList.remove("hidden");
+        } catch (err) {
+          toast(err.message);
+        }
+      }, 250);
+    });
+
+    input.addEventListener("blur", () => {
+      setTimeout(() => suggest.classList.add("hidden"), 150);
+    });
+
+    treeBtn.addEventListener("click", () => {
+      openCategoryTree(block, index);
+    });
+
+    removeBtn.addEventListener("click", () => {
+      state.categoryDraft[block].splice(index, 1);
+      if (!state.categoryDraft[block].length) state.categoryDraft[block] = [{}];
+      const sources =
+        state.categoriesContext === "edit"
+          ? selectedSearchSources(els.editSources)
+          : selectedSearchSources(els.createSources);
+      renderCategoriesPage(sources);
+      syncCategoryButtons();
+    });
+
+    row.appendChild(wrap);
+    row.appendChild(treeBtn);
+    row.appendChild(removeBtn);
+    return row;
+  }
+
+  function applyCategorySelection(block, index, node) {
+    const meta = node.meta || {};
+    if (block === "ebay") {
+      state.categoryDraft[block][index] = {
+        category_id: meta.category_id || node.id,
+        category_path: node.path || node.name,
+      };
+      return;
+    }
+    if (block === "etsy") {
+      state.categoryDraft[block][index] = {
+        taxonomy_id: meta.taxonomy_id != null ? meta.taxonomy_id : Number(node.id),
+        category_path: node.path || node.name,
+      };
+      return;
+    }
+    state.categoryDraft[block][index] = {
+      department: meta.department,
+      category: meta.category || null,
+      subcategory: meta.subcategory || null,
+      category_path: node.path || node.name,
+    };
+  }
+
+  async function openCategoryTree(block, index) {
+    state.treeTarget = { block, index };
+    els.treeDialogTitle.textContent =
+      block === "ebay" ? "Дерево eBay" : block === "etsy" ? "Дерево Etsy" : "Дерево Poshmark";
+    els.treeRoot.innerHTML = "<p class='hint'>Загрузка…</p>";
+    els.treeDialog.showModal();
+    try {
+      await renderTreeLevel(els.treeRoot, block, null);
+    } catch (err) {
+      els.treeRoot.innerHTML = `<p class="hint">${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  async function renderTreeLevel(container, block, parentId) {
+    const source = block === "ebay" ? "ebay_api" : block;
+    const params = new URLSearchParams({ source });
+    if (parentId) params.set("parent_id", parentId);
+    if (block === "ebay") params.set("marketplace", currentMarketplace());
+    const data = await api(`/categories?${params.toString()}`);
+    const items = data.items || [];
+    container.innerHTML = "";
+    if (!items.length) {
+      container.innerHTML = "<p class='hint'>Нет вложенных категорий</p>";
+      return;
+    }
+    items.forEach((node) => {
+      const wrap = document.createElement("div");
+      wrap.className = "tree-node";
+      const row = document.createElement("div");
+      row.className = "tree-node-row";
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "tree-toggle";
+      toggle.textContent = node.has_children ? "▸" : "·";
+      toggle.disabled = !node.has_children;
+      const pick = document.createElement("button");
+      pick.type = "button";
+      pick.className = "tree-pick";
+      pick.textContent = node.name;
+      const children = document.createElement("div");
+      children.className = "tree-children hidden";
+      pick.addEventListener("click", () => {
+        if (!state.treeTarget) return;
+        const { block: targetBlock, index } = state.treeTarget;
+        applyCategorySelection(targetBlock, index, node);
+        els.treeDialog.close();
+        const sources =
+          state.categoriesContext === "edit"
+            ? selectedSearchSources(els.editSources)
+            : selectedSearchSources(els.createSources);
+        renderCategoriesPage(sources);
+        syncCategoryButtons();
+      });
+      let opened = false;
+      toggle.addEventListener("click", async () => {
+        if (!node.has_children) return;
+        opened = !opened;
+        toggle.textContent = opened ? "▾" : "▸";
+        children.classList.toggle("hidden", !opened);
+        if (opened && !children.dataset.loaded) {
+          children.textContent = "…";
+          try {
+            await renderTreeLevel(children, block, node.id);
+            children.dataset.loaded = "1";
+          } catch (err) {
+            children.textContent = err.message;
+          }
+        }
+      });
+      row.appendChild(toggle);
+      row.appendChild(pick);
+      wrap.appendChild(row);
+      wrap.appendChild(children);
+      container.appendChild(wrap);
+    });
+  }
+
+  async function loadCategoriesStatus() {
+    if (!els.categoriesStatus) return;
+    try {
+      const status = await api("/categories/status");
+      const trees = status.trees || [];
+      const bits = trees.map((tree) => {
+        const label = tree.marketplace || tree.source;
+        const when = tree.updated_at ? String(tree.updated_at).slice(0, 10) : "—";
+        return `${label}: ${tree.nodes} (${when})`;
+      });
+      els.categoriesStatus.textContent = bits.length
+        ? bits.slice(0, 4).join(" · ") + (bits.length > 4 ? "…" : "")
+        : "Каталоги ещё не загружены";
+    } catch (err) {
+      els.categoriesStatus.textContent = err.message;
+    }
   }
 
   function syncEbayBlockVisibility() {
@@ -142,6 +561,7 @@
     const hasEbay = sources.some((source) => source !== "poshmark" && source !== "etsy");
     els.createBinWrap.classList.toggle("hidden", !hasEbay);
     els.createMarketplaceWrap.classList.toggle("hidden", !hasEbay);
+    syncCategoryButtons();
   }
 
   function syncEditSourceFields() {
@@ -149,6 +569,7 @@
     const hasEbay = sources.some((source) => source !== "poshmark" && source !== "etsy");
     els.editBinWrap.classList.toggle("hidden", !hasEbay);
     els.editMarketplaceWrap.classList.toggle("hidden", !hasEbay);
+    syncCategoryButtons();
   }
 
   function fillSearchSourcePicker(container, selected = []) {
@@ -440,6 +861,7 @@
           item.marketplace || state.me.ebay_marketplace || "EBAY_US",
         );
         els.editBin.checked = Boolean(item.buy_it_now);
+        state.categoryDraft = hydrateDraftFromCategories(item.categories || {});
         syncEditSourceFields();
         els.editKeywords.value = item.keywords;
         els.editMin.value = item.min_price ?? "";
@@ -474,6 +896,32 @@
     els.editDialog.close();
   });
 
+  els.btnCreateCategories.addEventListener("click", () => {
+    openCategoriesPage("create");
+  });
+  els.btnEditCategories.addEventListener("click", () => {
+    openCategoriesPage("edit");
+  });
+  document.getElementById("btn-categories-back").addEventListener("click", leaveCategoriesPage);
+  document.getElementById("btn-categories-done").addEventListener("click", leaveCategoriesPage);
+  document.getElementById("btn-tree-close").addEventListener("click", () => {
+    els.treeDialog.close();
+  });
+  document.getElementById("btn-refresh-categories").addEventListener("click", async () => {
+    const btn = document.getElementById("btn-refresh-categories");
+    btn.disabled = true;
+    try {
+      toast("Обновление каталогов…");
+      const result = await api("/categories/refresh", { method: "POST", body: "{}" });
+      await loadCategoriesStatus();
+      toast(result.message || (result.ok ? "Каталоги обновлены" : "Частичное обновление"));
+    } catch (err) {
+      toast(err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   document.getElementById("form-edit").addEventListener("submit", async (event) => {
     event.preventDefault();
     const id = Number(els.editId.value);
@@ -496,12 +944,14 @@
       payload.marketplace = els.editMarketplace.value;
       payload.buy_it_now = els.editBin.checked;
     }
+    payload.categories = categoriesPayloadFromDraft(sources);
     try {
       await api(`/searches/${id}`, {
         method: "PATCH",
         body: JSON.stringify(payload),
       });
       els.editDialog.close();
+      state.categoryDraft = emptyCategoryDraft();
       await loadAll();
       switchTab("searches");
       toast("Поиск обновлён");
@@ -533,6 +983,7 @@
     } else {
       payload.buy_it_now = false;
     }
+    payload.categories = categoriesPayloadFromDraft(sources);
     try {
       const result = await api("/searches", { method: "POST", body: JSON.stringify(payload) });
       const msg = result.message || "Новый поиск создан";
@@ -543,6 +994,7 @@
       }
       event.target.reset();
       document.getElementById("create-bin").checked = true;
+      state.categoryDraft = emptyCategoryDraft();
       fillSearchSourcePicker(els.createSources);
       fillCreateMarketplace();
       syncCreateSourceFields();

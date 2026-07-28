@@ -34,6 +34,8 @@ class PoshmarkProvider(BaseProvider):
         await self._client.aclose()
 
     async def search(self, search: Search, *, limit: int = 20) -> list[Listing]:
+        from bot.services.categories import categories_for_search, merge_listings_by_id
+
         if len(_SHIPPING_CACHE) > 2000:
             now = time.monotonic()
             expired = [key for key, value in _SHIPPING_CACHE.items() if value[0] <= now]
@@ -42,10 +44,36 @@ class PoshmarkProvider(BaseProvider):
         query = search.keywords.strip()
         if not query:
             return []
+        categories = categories_for_search(search.filters_json, self.source)
+        if not categories:
+            return await self._search_once(search, limit=limit, category=None)
+        batches: list[list[Listing]] = []
+        for category in categories:
+            batches.append(await self._search_once(search, limit=limit, category=category))
+        return merge_listings_by_id(batches, limit=limit)
+
+    async def _search_once(
+        self,
+        search: Search,
+        *,
+        limit: int,
+        category: dict | None,
+    ) -> list[Listing]:
+        query = search.keywords.strip()
         url = (
             f"https://poshmark.com/search?query={quote_plus(query)}"
             f"&type=listings&src=dir"
         )
+        if category:
+            department = str(category.get("department") or "").strip()
+            cat = str(category.get("category") or "").strip()
+            sub = str(category.get("subcategory") or "").strip()
+            if department:
+                url += f"&department={quote_plus(department)}"
+            if cat:
+                url += f"&category={quote_plus(cat)}"
+            if sub:
+                url += f"&subcategory={quote_plus(sub)}"
         try:
             response = await request_with_retries(
                 self._client,
