@@ -34,7 +34,11 @@ def extract_ebay_category_id(href: str) -> str | None:
 
 
 def parse_ebay_all_categories_html(html: str, *, host: str) -> list[dict[str, Any]]:
-    """Разбор страницы all-categories → узлы с category_id (_sacat)."""
+    """Разбор страницы all-categories → узлы с category_id (_sacat).
+
+    Актуальная вёрстка eBay: div.cat-container > a.top-cat (L1) +
+    div.cat-wrapper > h3.cat-title (L2) + ul.sub-cats (L3).
+    """
     soup = BeautifulSoup(html or "", "lxml")
     nodes_map: dict[str, dict[str, Any]] = {}
 
@@ -47,6 +51,8 @@ def parse_ebay_all_categories_html(html: str, *, host: str) -> list[dict[str, An
     ) -> None:
         name = _clean_name(name)
         if not category_id or not name:
+            return
+        if _is_ebay_noise_category_name(name):
             return
         existing = nodes_map.get(category_id)
         if existing is None:
@@ -65,39 +71,93 @@ def parse_ebay_all_categories_html(html: str, *, host: str) -> list[dict[str, An
         if parent_id and not existing.get("parent_id"):
             existing["parent_id"] = parent_id
 
-    # Вложенные списки: li > a + ul > li
-    for anchor in soup.select("a[href]"):
-        href = str(anchor.get("href") or "")
-        category_id = extract_ebay_category_id(href)
-        if not category_id:
-            continue
-        name = anchor.get_text(" ", strip=True) or _name_from_ebay_href(href)
-        parent_id = None
-        path = name
-        parent_li = anchor.find_parent("li")
-        if isinstance(parent_li, Tag):
-            parent_ul = parent_li.find_parent("ul")
-            if isinstance(parent_ul, Tag):
-                parent_holder = parent_ul.find_parent("li")
-                if isinstance(parent_holder, Tag):
-                    parent_a = parent_holder.find("a", href=True, recursive=False)
-                    if parent_a is None:
-                        parent_a = parent_holder.find("a", href=True)
-                    if parent_a is not None and parent_a is not anchor:
-                        parent_href = str(parent_a.get("href") or "")
-                        parent_id = extract_ebay_category_id(parent_href)
-                        parent_name = parent_a.get_text(" ", strip=True)
-                        if parent_id and parent_name:
-                            upsert(
-                                parent_id,
-                                parent_name,
-                                parent_id=None,
-                                path=parent_name,
-                            )
-                            path = f"{parent_name} > {name}"
-        upsert(category_id, name, parent_id=parent_id, path=path)
+    containers = soup.select("div.cat-container")
+    if containers:
+        for container in containers:
+            top = container.select_one("a.top-cat[href]")
+            l1_id = extract_ebay_category_id(str(top.get("href") or "")) if top else None
+            l1_name = ""
+            if top is not None:
+                h2 = top.find("h2")
+                l1_name = _clean_name(
+                    h2.get_text(" ", strip=True) if h2 else _ebay_anchor_name(top)
+                )
+            if l1_id and l1_name and not _is_ebay_noise_category_name(l1_name):
+                upsert(l1_id, l1_name, parent_id=None, path=l1_name)
 
-    # Проставить has_children
+            for wrapper in container.select("div.cat-wrapper"):
+                title = wrapper.select_one("h3.cat-title")
+                if title is None:
+                    continue
+                title_classes = {str(c).lower() for c in (title.get("class") or [])}
+                if "cat-title-no-link" in title_classes:
+                    # Popular Topics / промо-блоки без реальной ветки
+                    continue
+                l2_anchor = title.find("a", href=True)
+                if l2_anchor is None:
+                    continue
+                l2_name = _ebay_anchor_name(l2_anchor)
+                if _is_ebay_noise_category_name(l2_name):
+                    continue
+                l2_id = extract_ebay_category_id(str(l2_anchor.get("href") or ""))
+                if not l2_id:
+                    continue
+                if l1_id and l1_name:
+                    l2_path = f"{l1_name} > {l2_name}"
+                    l2_parent = l1_id
+                else:
+                    l2_path = l2_name
+                    l2_parent = None
+                upsert(l2_id, l2_name, parent_id=l2_parent, path=l2_path)
+
+                for item in wrapper.select("ul.sub-cats > li"):
+                    classes = {str(c).lower() for c in (item.get("class") or [])}
+                    if "view-more-link" in classes:
+                        continue
+                    child = item.find("a", href=True)
+                    if child is None:
+                        continue
+                    child_id = extract_ebay_category_id(str(child.get("href") or ""))
+                    child_name = _ebay_anchor_name(child)
+                    if not child_id or child_id == l2_id:
+                        continue
+                    if _is_ebay_noise_category_name(child_name):
+                        continue
+                    child_path = f"{l2_path} > {child_name}"
+                    upsert(child_id, child_name, parent_id=l2_id, path=child_path)
+    else:
+        # Fallback: старые вложенные списки li > a + ul > li
+        for anchor in soup.select("a[href]"):
+            href = str(anchor.get("href") or "")
+            category_id = extract_ebay_category_id(href)
+            if not category_id:
+                continue
+            name = _ebay_anchor_name(anchor) or _name_from_ebay_href(href)
+            parent_id = None
+            path = name
+            parent_li = anchor.find_parent("li")
+            if isinstance(parent_li, Tag):
+                parent_ul = parent_li.find_parent("ul")
+                if isinstance(parent_ul, Tag):
+                    parent_holder = parent_ul.find_parent("li")
+                    if isinstance(parent_holder, Tag):
+                        parent_a = parent_holder.find("a", href=True, recursive=False)
+                        if parent_a is None:
+                            parent_a = parent_holder.find("a", href=True)
+                        if parent_a is not None and parent_a is not anchor:
+                            parent_href = str(parent_a.get("href") or "")
+                            parent_id = extract_ebay_category_id(parent_href)
+                            parent_name = _ebay_anchor_name(parent_a)
+                            if parent_id and parent_name:
+                                upsert(
+                                    parent_id,
+                                    parent_name,
+                                    parent_id=None,
+                                    path=parent_name,
+                                )
+                                path = f"{parent_name} > {name}"
+            upsert(category_id, name, parent_id=parent_id, path=path)
+
     children_of: set[str] = set()
     for node in nodes_map.values():
         parent = node.get("parent_id")
@@ -106,16 +166,8 @@ def parse_ebay_all_categories_html(html: str, *, host: str) -> list[dict[str, An
     for node_id, node in nodes_map.items():
         node["has_children"] = node_id in children_of
 
-    # Если иерархия не распознана — оставить плоский список корней
-    if nodes_map and sum(1 for n in nodes_map.values() if n.get("parent_id")) == 0:
-        for node in nodes_map.values():
-            node["parent_id"] = None
-            node["path"] = node["name"]
-            node["has_children"] = False
-
     _ = host  # reserved for absolute URL joins if needed later
     return list(nodes_map.values())
-
 
 def parse_ebay_subcategory_html(
     html: str,
@@ -388,14 +440,31 @@ async def crawl_ebay_marketplace(
         raise RuntimeError(f"eBay all-categories недоступен для {marketplace}")
 
     nodes = parse_ebay_all_categories_html(html, host=host)
-    if len(nodes) < 30 and max_expand > 0:
-        # Расширяем топ-корни подкатегориями
+    with_parent = sum(1 for n in nodes if n.get("parent_id"))
+    # Expand, если дерево плоское/мелкое — иначе all-categories уже даёт L1→L3.
+    should_expand = max_expand > 0 and (with_parent < 80 or len(nodes) < 80)
+    if should_expand:
         roots = [n for n in nodes if not n.get("parent_id")][:max_expand]
         if not roots:
-            # fallback: взять любые найденные id как корни для expand
             roots = nodes[:max_expand]
+        # Приоритет: крупные корни (Jewelry, Clothing, …)
+        priority = {
+            "281",
+            "11450",
+            "11700",
+            "293",
+            "1",
+            "220",
+            "888",
+            "6000",
+            "58058",
+            "26395",
+        }
+        roots.sort(
+            key=lambda n: (0 if str(n.get("id")) in priority else 1, str(n.get("name") or ""))
+        )
         extra: list[dict[str, Any]] = []
-        for root in roots:
+        for root in roots[:max_expand]:
             await asyncio.sleep(delay_sec)
             category_id = str(root["id"])
             page_url = f"https://{host}/sch/{category_id}/i.html"
@@ -417,7 +486,6 @@ async def crawl_ebay_marketplace(
     if len(nodes) < 10:
         raise RuntimeError(f"eBay parser: слишком мало категорий ({len(nodes)})")
     return nodes
-
 
 async def crawl_etsy_categories(
     client: httpx.AsyncClient,
@@ -517,7 +585,40 @@ def _looks_blocked(html: str) -> bool:
 def _clean_name(value: str) -> str:
     text = re.sub(r"\s+", " ", (value or "").strip())
     text = re.sub(r"\s*\(\d[\d,]*\)\s*$", "", text)
+    # убрать хвост " - Parent" если clipped не вырезали
+    text = re.sub(r"\s+-\s+[^-]{2,80}$", "", text)
     return text[:120]
+
+
+def _ebay_anchor_name(anchor: Tag) -> str:
+    title = str(anchor.get("title") or "").strip()
+    if title:
+        return _clean_name(title)
+    parts: list[str] = []
+    for child in anchor.children:
+        if isinstance(child, Tag):
+            classes = {str(c).lower() for c in (child.get("class") or [])}
+            if "clipped" in classes:
+                continue
+            text = child.get_text(" ", strip=True)
+        else:
+            text = str(child).strip()
+        if text:
+            parts.append(text)
+    if parts:
+        return _clean_name(" ".join(parts))
+    return _clean_name(anchor.get_text(" ", strip=True))
+
+
+def _is_ebay_noise_category_name(name: str) -> bool:
+    low = (name or "").strip().lower()
+    if not low:
+        return True
+    if low.startswith("view all"):
+        return True
+    if low in {"popular topics", "top stores", "see all", "shop all"}:
+        return True
+    return False
 
 
 def _name_from_ebay_href(href: str) -> str:

@@ -262,6 +262,11 @@ class TaxonomyService:
         self._memory[key] = tree
 
     def _is_stale(self, tree: dict[str, Any]) -> bool:
+        # Seed — временная заглушка: всегда считаем устаревшей, иначе после
+        # рестарта контейнера seed с «свежим» updated_at блокирует refresh на месяц.
+        method = str(tree.get("method") or "seed").lower()
+        if method == "seed":
+            return True
         updated = tree.get("updated_at")
         if not updated:
             return True
@@ -432,13 +437,30 @@ def _ebay_seed_nodes() -> list[dict[str, Any]]:
         ("45258", "11450", "Handbags"),
         ("163570", "11450", "Accessories"),
     ]
+    jewelry = [
+        ("260324", "281", "Watches, Parts & Accessories"),
+        ("4196", "281", "Fine Jewelry"),
+        ("10968", "281", "Fashion Jewelry"),
+        ("10290", "281", "Men's Jewelry"),
+        ("110633", "281", "Handcrafted & Artisan Jewelry"),
+        ("262024", "281", "Vintage & Antique Jewelry"),
+        ("261986", "281", "Body Jewelry"),
+        ("84605", "281", "Children's Jewelry"),
+    ]
+    jewelry_leaves = [
+        ("261993", "4196", "Fine Necklaces & Pendants", "Jewelry & Watches > Fine Jewelry"),
+        ("155101", "10968", "Fashion Necklaces & Pendants", "Jewelry & Watches > Fashion Jewelry"),
+        ("137839", "10290", "Men's Necklaces & Pendants", "Jewelry & Watches > Men's Jewelry"),
+        ("110655", "110633", "Handcrafted Necklaces & Pendants", "Jewelry & Watches > Handcrafted & Artisan Jewelry"),
+        ("262013", "262024", "Vintage & Antique Necklaces & Pendants", "Jewelry & Watches > Vintage & Antique Jewelry"),
+    ]
     nodes = [
         {
             "id": cid,
             "name": name,
             "path": name,
             "parent_id": None,
-            "has_children": cid == "11450",
+            "has_children": cid in {"11450", "281"},
             "meta": {"category_id": cid},
         }
         for cid, name in roots
@@ -449,6 +471,29 @@ def _ebay_seed_nodes() -> list[dict[str, Any]]:
                 "id": cid,
                 "name": name,
                 "path": f"Clothing, Shoes & Accessories > {name}",
+                "parent_id": parent,
+                "has_children": False,
+                "meta": {"category_id": cid},
+            }
+        )
+    jewelry_with_children = {parent for _, parent, _, _ in jewelry_leaves}
+    for cid, parent, name in jewelry:
+        nodes.append(
+            {
+                "id": cid,
+                "name": name,
+                "path": f"Jewelry & Watches > {name}",
+                "parent_id": parent,
+                "has_children": cid in jewelry_with_children,
+                "meta": {"category_id": cid},
+            }
+        )
+    for cid, parent, name, parent_path in jewelry_leaves:
+        nodes.append(
+            {
+                "id": cid,
+                "name": name,
+                "path": f"{parent_path} > {name}",
                 "parent_id": parent,
                 "has_children": False,
                 "meta": {"category_id": cid},

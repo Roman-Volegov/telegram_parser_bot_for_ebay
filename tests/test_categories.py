@@ -104,3 +104,13 @@ class EbayParserCategoryParamsTests(unittest.TestCase):
         )
         params = provider._build_params(search, category_id="11450")
         self.assertEqual(params["_sacat"], "11450")
+
+
+class TaxonomyStaleSeedTests(unittest.TestCase):
+    def test_seed_trees_are_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = TaxonomyService(Path(tmp) / "tax")
+            status = service.status()
+            ebay = next(item for item in status["trees"] if item["key"] == "ebay:EBAY_US")
+            self.assertTrue(ebay["stale"])
+            self.assertEqual(ebay["method"], "seed")
