@@ -42,6 +42,7 @@ USER_COMMANDS = [
     BotCommand(command="settings", description="Настройки (алиас)"),
     BotCommand(command="keys_status", description="Статус ключей eBay"),
     BotCommand(command="revoke_keys", description="Удалить ключи eBay"),
+    BotCommand(command="etsy_captcha", description="Ссылка на CAPTCHA Etsy (noVNC)"),
     BotCommand(command="help", description="Справка"),
 ]
 

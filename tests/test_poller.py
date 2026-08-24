@@ -143,5 +143,31 @@ class PollerTests(unittest.IsolatedAsyncioTestCase):
 
         await poller.process_search(search, notify=True)
 
+        recipients = {
+            call.args[0] for call in self.bot.send_message.await_args_list
+        }
+        self.assertEqual(recipients, {99, 10})
+
+    async def test_captcha_notifies_owner_even_without_admins(self):
+        poller = PollerService(
+            self.bot,
+            self.db,
+            credentials=None,
+            interval_sec=300,
+            etsy_vnc_access=FakeAccess(),
+            etsy_captcha_notify_ids=set(),
+        )
+        search = Search(
+            id=3,
+            telegram_id=42,
+            source=Source.ETSY,
+            keywords="ring",
+        )
+        poller._build_provider = AsyncMock(
+            return_value=FakeProvider(
+                error=ProviderError("captcha", code="ETSY_CAPTCHA")
+            )
+        )
+        await poller.process_search(search, notify=True)
         self.bot.send_message.assert_awaited_once()
-        self.assertEqual(self.bot.send_message.await_args.args[0], 99)
+        self.assertEqual(self.bot.send_message.await_args.args[0], 42)

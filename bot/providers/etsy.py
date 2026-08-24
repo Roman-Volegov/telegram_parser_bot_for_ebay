@@ -18,7 +18,7 @@ from bot.providers.http_utils import (
     request_with_retries,
     truncate,
 )
-from bot.providers.etsy_browser import fetch_search_html
+from bot.providers.etsy_browser import EtsyBrowserError, fetch_search_html
 from bot.providers.listing_meta import parse_shipping_info
 
 logger = logging.getLogger(__name__)
@@ -181,7 +181,26 @@ class EtsyProvider(BaseProvider):
         url = self._search_url(search, category=category)
         try:
             html = await fetch_search_html(url, proxy=self._proxy)
+        except EtsyBrowserError as exc:
+            raise ProviderError(
+                f"Etsy browser: {exc}. Откройте noVNC и пройдите проверку.",
+                code="ETSY_CAPTCHA",
+            ) from exc
         except Exception as exc:
+            message = str(exc).lower()
+            if any(
+                marker in message
+                for marker in (
+                    "opening in existing browser session",
+                    "profile is already in use",
+                    "singletonlock",
+                )
+            ):
+                raise ProviderError(
+                    f"Etsy browser занят/заблокирован: {exc}. "
+                    "Откройте noVNC или перезапустите контейнер.",
+                    code="ETSY_CAPTCHA",
+                ) from exc
             raise ProviderError(f"Etsy browser failed: {exc}") from exc
 
         if _looks_like_datadome(html) and "/listing/" not in html:
@@ -192,6 +211,12 @@ class EtsyProvider(BaseProvider):
             )
 
         listings = _parse_search_html(html, limit=limit)
+        if not listings and _looks_like_blocked_empty(html):
+            raise ProviderError(
+                "Etsy вернул пустую выдачу (похоже на блокировку/CAPTCHA). "
+                "Откройте noVNC и пройдите проверку.",
+                code="ETSY_CAPTCHA",
+            )
         if not listings:
             logger.warning("Etsy browser returned 0 items for %r", search.keywords)
         return listings
@@ -296,8 +321,18 @@ def _looks_like_datadome(html: str) -> bool:
     return (
         "datadome" in low
         or "datadome_challenge" in low
+        or "captcha-delivery.com" in low
         or "please enable js and disable any ad blocker" in low
+        or "geo.captcha-delivery.com" in low
+        or ("access denied" in low and "etsy" in low)
     )
+
+
+def _looks_like_blocked_empty(html: str) -> bool:
+    """Пустая выдача без листингов, но со следами антибота / challenge."""
+    if "/listing/" in (html or ""):
+        return False
+    return _looks_like_datadome(html) or "challenge" in (html or "").lower()
 
 
 def _parse_api_listings(payload: Any, *, limit: int) -> list[Listing]:

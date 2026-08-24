@@ -568,12 +568,23 @@ async def _fetch_etsy_html(
             return text
     except Exception as exc:
         logger.debug("Etsy httpx fetch failed %s: %s", url, exc)
-    # Playwright fallback (тот же профиль, что для поиска)
+    # Playwright fallback — только если профиль не занят процессом бота.
     try:
-        from bot.providers.etsy_browser import fetch_search_html
+        from bot.providers.etsy_browser import EtsyBrowserError, fetch_search_html
 
         return await fetch_search_html(url, proxy=proxy)
+    except EtsyBrowserError as exc:
+        raise RuntimeError(
+            f"Etsy HTML недоступен ({url}): профиль браузера занят ботом "
+            f"или CAPTCHA. Используйте /etsy_captcha. ({exc})"
+        ) from exc
     except Exception as exc:
+        message = str(exc).lower()
+        if "opening in existing browser session" in message:
+            raise RuntimeError(
+                f"Etsy HTML недоступен ({url}): профиль Chromium уже открыт ботом. "
+                "Обновление категорий Etsy пропущено — сначала /etsy_captcha."
+            ) from exc
         raise RuntimeError(f"Etsy HTML недоступен ({url}): {exc}") from exc
 
 

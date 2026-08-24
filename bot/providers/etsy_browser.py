@@ -18,12 +18,51 @@ _html_cache: dict[str, tuple[float, str]] = {}
 HTML_CACHE_TTL_SEC = 60
 
 
+class EtsyBrowserError(RuntimeError):
+    """Ошибка браузера Etsy (профиль/запуск) — нужна ручная проверка."""
+
+    def __init__(self, message: str, *, needs_human: bool = False) -> None:
+        super().__init__(message)
+        self.needs_human = needs_human
+
+
 def _headless() -> bool:
     return os.getenv("ETSY_BROWSER_HEADLESS", "true").strip().lower() not in {
         "0",
         "false",
         "no",
     }
+
+
+def _profile_dir() -> Path:
+    return Path(
+        os.getenv("ETSY_BROWSER_PROFILE_DIR", "/app/data/etsy-browser-profile")
+    )
+
+
+def _clear_profile_locks(profile_dir: Path) -> None:
+    for name in (
+        "SingletonLock",
+        "SingletonCookie",
+        "SingletonSocket",
+        "lockfile",
+    ):
+        path = profile_dir / name
+        try:
+            if path.exists() or path.is_symlink():
+                path.unlink()
+                logger.info("Removed stale Chromium lock %s", path)
+        except OSError:
+            logger.debug("Failed to remove Chromium lock %s", path, exc_info=True)
+
+
+def _is_profile_busy_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return (
+        "opening in existing browser session" in text
+        or "singletonlock" in text
+        or "profile is already in use" in text
+    )
 
 
 async def _get_context(*, proxy: str | None = None):
@@ -47,9 +86,7 @@ async def _get_context(*, proxy: str | None = None):
 
         if _playwright is None:
             _playwright = await async_playwright().start()
-        profile_dir = Path(
-            os.getenv("ETSY_BROWSER_PROFILE_DIR", "/app/data/etsy-browser-profile")
-        )
+        profile_dir = _profile_dir()
         profile_dir.mkdir(parents=True, exist_ok=True)
         launch_kwargs: dict[str, Any] = {
             "headless": _headless(),
@@ -66,10 +103,34 @@ async def _get_context(*, proxy: str | None = None):
         }
         if proxy:
             launch_kwargs["proxy"] = {"server": proxy}
-        _context = await _playwright.chromium.launch_persistent_context(
-            str(profile_dir),
-            **launch_kwargs,
-        )
+
+        last_error: BaseException | None = None
+        for attempt in range(2):
+            try:
+                _context = await _playwright.chromium.launch_persistent_context(
+                    str(profile_dir),
+                    **launch_kwargs,
+                )
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt == 0 and _is_profile_busy_error(exc):
+                    logger.warning(
+                        "Etsy browser profile locked; clearing Singleton* and retrying"
+                    )
+                    _clear_profile_locks(profile_dir)
+                    await asyncio.sleep(0.5)
+                    continue
+                raise EtsyBrowserError(
+                    f"Не удалось запустить браузер Etsy: {exc}",
+                    needs_human=_is_profile_busy_error(exc),
+                ) from exc
+        else:
+            raise EtsyBrowserError(
+                f"Не удалось запустить браузер Etsy: {last_error}",
+                needs_human=True,
+            )
+
         _context_proxy = proxy
         await _context.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
