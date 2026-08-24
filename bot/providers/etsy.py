@@ -84,9 +84,10 @@ class EtsyProvider(BaseProvider):
         limit: int,
         category: dict | None = None,
     ) -> list[Listing]:
+        candidate_limit = min(max(limit * 5, limit), 100)
         params: dict[str, str | int | float] = {
             "keywords": search.keywords.strip(),
-            "limit": min(max(limit, 1), 100),
+            "limit": candidate_limit,
             "sort_on": "created",
             "sort_order": "desc",
             "includes": "Images",
@@ -125,9 +126,18 @@ class EtsyProvider(BaseProvider):
         except Exception as exc:
             raise ProviderError(f"Etsy API: невалидный JSON: {exc}") from exc
 
-        listings = _parse_api_listings(payload, limit=limit)
+        candidates = _parse_api_listings(payload, limit=candidate_limit)
+        listings = _filter_title_matches(
+            candidates,
+            search.keywords,
+            limit=limit,
+        )
         if not listings:
-            logger.warning("Etsy API returned 0 items for %r", search.keywords)
+            logger.info(
+                "Etsy API title filter returned 0/%s items for %r",
+                len(candidates),
+                search.keywords,
+            )
         return listings
 
     async def verify_credentials(self) -> None:
@@ -210,15 +220,25 @@ class EtsyProvider(BaseProvider):
                 code="ETSY_CAPTCHA",
             )
 
-        listings = _parse_search_html(html, limit=limit)
-        if not listings and _looks_like_blocked_empty(html):
+        candidate_limit = min(max(limit * 5, limit), 100)
+        candidates = _parse_search_html(html, limit=candidate_limit)
+        if not candidates and _looks_like_blocked_empty(html):
             raise ProviderError(
                 "Etsy вернул пустую выдачу (похоже на блокировку/CAPTCHA). "
                 "Откройте noVNC и пройдите проверку.",
                 code="ETSY_CAPTCHA",
             )
+        listings = _filter_title_matches(
+            candidates,
+            search.keywords,
+            limit=limit,
+        )
         if not listings:
-            logger.warning("Etsy browser returned 0 items for %r", search.keywords)
+            logger.info(
+                "Etsy browser title filter returned 0/%s items for %r",
+                len(candidates),
+                search.keywords,
+            )
         return listings
 
     async def _search_via_html(self, search: Search, *, limit: int) -> list[Listing]:
@@ -248,9 +268,19 @@ class EtsyProvider(BaseProvider):
         except Exception as exc:
             raise ProviderError(f"Etsy request failed: {exc}") from exc
 
-        listings = _parse_search_html(response.text, limit=limit)
+        candidate_limit = min(max(limit * 5, limit), 100)
+        candidates = _parse_search_html(response.text, limit=candidate_limit)
+        listings = _filter_title_matches(
+            candidates,
+            search.keywords,
+            limit=limit,
+        )
         if not listings:
-            logger.warning("Etsy returned 0 items for %r", search.keywords)
+            logger.info(
+                "Etsy HTML title filter returned 0/%s items for %r",
+                len(candidates),
+                search.keywords,
+            )
             return []
 
         sem = asyncio.Semaphore(5)
@@ -333,6 +363,30 @@ def _looks_like_blocked_empty(html: str) -> bool:
     if "/listing/" in (html or ""):
         return False
     return _looks_like_datadome(html) or "challenge" in (html or "").lower()
+
+
+def _filter_title_matches(
+    listings: list[Listing],
+    keywords: str,
+    *,
+    limit: int,
+) -> list[Listing]:
+    """Оставляет Etsy-товары, где все слова запроса есть именно в заголовке."""
+    query_tokens = _search_tokens(keywords)
+    if not query_tokens:
+        return listings[:limit]
+    matched: list[Listing] = []
+    for listing in listings:
+        title_tokens = set(_search_tokens(listing.title))
+        if all(token in title_tokens for token in query_tokens):
+            matched.append(listing)
+            if len(matched) >= limit:
+                break
+    return matched
+
+
+def _search_tokens(value: str) -> list[str]:
+    return re.findall(r"[^\W_]+", (value or "").casefold(), flags=re.UNICODE)
 
 
 def _parse_api_listings(payload: Any, *, limit: int) -> list[Listing]:

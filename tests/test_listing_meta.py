@@ -61,7 +61,7 @@ class ListingMetaTests(unittest.TestCase):
         self.assertEqual(currency, "USD")
         self.assertFalse(is_free)
 
-    def test_caption_includes_shipping_and_type(self):
+    def test_caption_omits_shipping_and_includes_type(self):
         listing = Listing(
             id="1",
             title="Nike Dunk",
@@ -76,8 +76,24 @@ class ListingMetaTests(unittest.TestCase):
             listing_type="Buy It Now",
         )
         caption = build_caption(listing)
-        self.assertIn("Доставка: 5.00 USD", caption)
+        self.assertNotIn("Доставка", caption)
         self.assertIn("Тип: Buy It Now", caption)
+        self.assertIn("Nice shoes", caption)
+
+    def test_caption_does_not_repeat_title_as_description(self):
+        listing = Listing(
+            id="2",
+            title="Monet Gold Necklace",
+            description="  Monet Gold Necklace  ",
+            price=45.0,
+            currency="USD",
+            image_url=None,
+            item_url="https://etsy.com/listing/2",
+            source=Source.ETSY,
+        )
+        caption = build_caption(listing)
+        self.assertEqual(caption.count("Monet Gold Necklace"), 1)
+        self.assertNotIn("Доставка", caption)
 
 
 if __name__ == "__main__":

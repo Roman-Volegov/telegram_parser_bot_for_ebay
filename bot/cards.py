@@ -16,19 +16,19 @@ logger = logging.getLogger(__name__)
 def build_caption(listing: Listing) -> str:
     source = SOURCE_LABELS.get(listing.source, listing.source.value)
     title = escape(listing.title)
-    desc = escape(listing.description or listing.title)
     price = escape(listing.price_label)
-    shipping = escape(listing.shipping_label)
 
-    meta_lines = [
-        f"💰 Цена: {price}",
-        f"🚚 Доставка: {shipping}",
-    ]
+    meta_lines = [f"💰 Цена: {price}"]
     if listing.source in {Source.EBAY_API, Source.EBAY_PARSER} and listing.listing_type:
         meta_lines.append(f"🏷 Тип: {escape(listing.listing_type)}")
     meta_lines.append(f"📦 {escape(source)}")
 
-    caption = f"<b>{title}</b>\n" + "\n".join(meta_lines) + f"\n\n{desc}"
+    caption = f"<b>{title}</b>\n" + "\n".join(meta_lines)
+    description = (listing.description or "").strip()
+    if description and " ".join(description.split()).casefold() != " ".join(
+        listing.title.split()
+    ).casefold():
+        caption += f"\n\n{escape(description)}"
     # Telegram caption limit ~1024
     if len(caption) > 1000:
         caption = caption[:997] + "…"

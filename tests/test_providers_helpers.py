@@ -6,6 +6,7 @@ from bot.providers.ebay_parser import _extract_ebay_item_id, _parse_html_listing
 from bot.providers.etsy import (
     _extract_etsy_listing_id,
     _extract_shipping_from_detail,
+    _filter_title_matches,
     _looks_like_datadome,
     _parse_api_listings,
     _parse_search_html,
@@ -82,6 +83,54 @@ class HelpersTests(unittest.TestCase):
         self.assertEqual(items[0].price, 19.99)
         self.assertEqual(items[0].currency, "USD")
         self.assertEqual(items[0].image_url, "https://i.etsystatic.com/bag.jpg")
+
+    def test_etsy_title_filter_requires_all_query_words_in_title(self):
+        html = """
+        <ul>
+          <li>
+            <a href="/listing/1000000001/monet-necklace">
+              <img alt="Vintage Monet Gold Necklace" />
+              <h3>Vintage Monet Gold Necklace</h3>
+            </a>
+          </li>
+          <li>
+            <a href="/listing/1000000002/generic-necklace">
+              <img alt="Vintage Gold Necklace" />
+              <h3>Vintage Gold Necklace</h3>
+            </a>
+          </li>
+          <li>
+            <a href="/listing/1000000003/monet-brooch">
+              <img alt="Monet Gold Brooch" />
+              <h3>Monet Gold Brooch</h3>
+            </a>
+          </li>
+        </ul>
+        """
+        candidates = _parse_search_html(html, limit=10)
+        items = _filter_title_matches(
+            candidates,
+            "Monet Necklace",
+            limit=10,
+        )
+        self.assertEqual([item.id for item in items], ["1000000001"])
+
+    def test_etsy_title_filter_does_not_match_description_only(self):
+        payload = {
+            "results": [
+                {
+                    "listing_id": 1000000004,
+                    "title": "Vintage Gold Necklace",
+                    "description": "Beautiful Monet jewelry",
+                    "url": "https://www.etsy.com/listing/1000000004/item",
+                }
+            ]
+        }
+        candidates = _parse_api_listings(payload, limit=10)
+        self.assertEqual(
+            _filter_title_matches(candidates, "Monet", limit=10),
+            [],
+        )
 
     def test_etsy_shipping_from_detail(self):
         html = """
