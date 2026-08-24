@@ -17,6 +17,10 @@ https://{$MINIAPP_DOMAIN} {
 	handle_path /{$ETSY_NOVNC_TOKEN}/* {
 		forward_auth bot:8080 {
 			uri /internal/etsy-vnc-auth
+			# Auth-запрос должен оставаться обычным HTTP. Иначе Upgrade
+			# превращает его в WebSocket к FastAPI, который отвечает 403.
+			header_up -Connection
+			header_up -Upgrade
 		}
 		reverse_proxy bot:6080
 	}
