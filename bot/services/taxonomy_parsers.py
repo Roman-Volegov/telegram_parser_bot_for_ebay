@@ -21,6 +21,13 @@ EBAY_CAT_ID_RE = re.compile(
 ETSY_TAXONOMY_RE = re.compile(r"[?&]taxonomy_id=(\d+)", re.IGNORECASE)
 ETSY_PATH_RE = re.compile(r"/c/([a-z0-9\-/]+)", re.IGNORECASE)
 POSH_CAT_RE = re.compile(r"/category/([^\"'?#]+)", re.IGNORECASE)
+ETSY_CONSECUTIVE_BLOCK_LIMIT = 3
+
+
+class EtsyHtmlFetchError(RuntimeError):
+    def __init__(self, message: str, *, http_blocked: bool = False) -> None:
+        super().__init__(message)
+        self.http_blocked = http_blocked
 
 
 def extract_ebay_category_id(href: str) -> str | None:
@@ -494,7 +501,11 @@ async def crawl_etsy_categories(
     max_pages: int = 40,
     delay_sec: float = 0.8,
 ) -> list[dict[str, Any]]:
-    html = await _fetch_etsy_html(client, "https://www.etsy.com/categories", proxy=proxy)
+    html, _ = await _fetch_etsy_html(
+        client,
+        "https://www.etsy.com/categories",
+        proxy=proxy,
+    )
     nodes = parse_etsy_categories_html(html)
     # Обходим найденные /c/ ссылки без taxonomy_id, чтобы добрать id
     soup = BeautifulSoup(html, "lxml")
@@ -504,14 +515,39 @@ async def crawl_etsy_categories(
         slug = _etsy_slug(href)
         if slug and slug not in paths:
             paths.append(slug)
+    consecutive_blocked = 0
     for slug in paths[:max_pages]:
         await asyncio.sleep(delay_sec)
         url = f"https://www.etsy.com/c/{slug}"
         try:
-            page_html = await _fetch_etsy_html(client, url, proxy=proxy)
+            page_html, http_blocked = await _fetch_etsy_html(
+                client,
+                url,
+                proxy=proxy,
+            )
             nodes = merge_taxonomy_nodes(nodes, parse_etsy_categories_html(page_html))
+            consecutive_blocked = consecutive_blocked + 1 if http_blocked else 0
+            if consecutive_blocked >= ETSY_CONSECUTIVE_BLOCK_LIMIT:
+                logger.warning(
+                    "Stopping Etsy taxonomy crawl after %s consecutive blocked "
+                    "HTTP responses",
+                    consecutive_blocked,
+                )
+                break
         except Exception as exc:
+            consecutive_blocked = (
+                consecutive_blocked + 1
+                if getattr(exc, "http_blocked", False)
+                else 0
+            )
             logger.debug("Etsy category page failed %s: %s", slug, exc)
+            if consecutive_blocked >= ETSY_CONSECUTIVE_BLOCK_LIMIT:
+                logger.warning(
+                    "Stopping Etsy taxonomy crawl after %s consecutive blocked "
+                    "HTTP responses",
+                    consecutive_blocked,
+                )
+                break
     # Оставляем узлы с taxonomy_id в приоритете; slug-only тоже полезны для UI,
     # но поиск Etsy сейчас требует taxonomy_id — отфильтруем slug-only без id
     usable = [
@@ -560,32 +596,39 @@ async def _fetch_etsy_html(
     url: str,
     *,
     proxy: str | None = None,
-) -> str:
+) -> tuple[str, bool]:
+    http_blocked = False
     try:
         response = await client.get(url, timeout=60.0)
         text = response.text or ""
+        http_blocked = response.status_code in {403, 429} or _looks_blocked(text)
         if response.status_code < 400 and not _looks_blocked(text) and len(text) > 800:
-            return text
+            return text, False
     except Exception as exc:
         logger.debug("Etsy httpx fetch failed %s: %s", url, exc)
     # Playwright fallback — только если профиль не занят процессом бота.
     try:
         from bot.providers.etsy_browser import EtsyBrowserError, fetch_search_html
 
-        return await fetch_search_html(url, proxy=proxy)
+        return await fetch_search_html(url, proxy=proxy), http_blocked
     except EtsyBrowserError as exc:
-        raise RuntimeError(
+        raise EtsyHtmlFetchError(
             f"Etsy HTML недоступен ({url}): профиль браузера занят ботом "
-            f"или CAPTCHA. Используйте /etsy_captcha. ({exc})"
+            f"или CAPTCHA. Используйте /etsy_captcha. ({exc})",
+            http_blocked=http_blocked,
         ) from exc
     except Exception as exc:
         message = str(exc).lower()
         if "opening in existing browser session" in message:
-            raise RuntimeError(
+            raise EtsyHtmlFetchError(
                 f"Etsy HTML недоступен ({url}): профиль Chromium уже открыт ботом. "
-                "Обновление категорий Etsy пропущено — сначала /etsy_captcha."
+                "Обновление категорий Etsy пропущено — сначала /etsy_captcha.",
+                http_blocked=http_blocked,
             ) from exc
-        raise RuntimeError(f"Etsy HTML недоступен ({url}): {exc}") from exc
+        raise EtsyHtmlFetchError(
+            f"Etsy HTML недоступен ({url}): {exc}",
+            http_blocked=http_blocked,
+        ) from exc
 
 
 def _looks_blocked(html: str) -> bool:

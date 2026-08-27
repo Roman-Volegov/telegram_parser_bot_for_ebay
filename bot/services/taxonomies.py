@@ -138,28 +138,41 @@ class TaxonomyService:
         etsy_api_key: str | None = None,
         force: bool = True,
     ) -> dict[str, Any]:
-        _ = (ebay_client_id, ebay_client_secret, etsy_api_key, force)
+        _ = (ebay_client_id, ebay_client_secret, etsy_api_key)
         async with self._lock:
             if self._refreshing:
                 return {"ok": False, "message": "Обновление уже выполняется", "refreshing": True}
             self._refreshing = True
         try:
             results: dict[str, Any] = {}
-            try:
-                results["ebay"] = await self._refresh_ebay_parser()
-            except Exception as exc:
-                logger.exception("eBay parser taxonomy refresh failed")
-                results["ebay"] = {"ok": False, "error": str(exc)}
-            try:
-                results["etsy"] = await self._refresh_etsy_parser()
-            except Exception as exc:
-                logger.exception("Etsy parser taxonomy refresh failed")
-                results["etsy"] = {"ok": False, "error": str(exc)}
-            try:
-                results["poshmark"] = await self._refresh_poshmark_parser()
-            except Exception as exc:
-                logger.exception("Poshmark taxonomy refresh failed")
-                results["poshmark"] = {"ok": False, "error": str(exc)}
+            if force or self._ebay_is_stale():
+                try:
+                    results["ebay"] = await self._refresh_ebay_parser(force=force)
+                except Exception as exc:
+                    logger.exception("eBay parser taxonomy refresh failed")
+                    results["ebay"] = {"ok": False, "error": str(exc)}
+            else:
+                results["ebay"] = {"ok": True, "skipped": True, "reason": "fresh"}
+            if force or self._key_is_stale("etsy"):
+                try:
+                    results["etsy"] = await self._refresh_etsy_parser()
+                except Exception as exc:
+                    logger.exception("Etsy parser taxonomy refresh failed")
+                    results["etsy"] = {"ok": False, "error": str(exc)}
+            else:
+                results["etsy"] = {"ok": True, "skipped": True, "reason": "fresh"}
+            if force or self._key_is_stale("poshmark"):
+                try:
+                    results["poshmark"] = await self._refresh_poshmark_parser()
+                except Exception as exc:
+                    logger.exception("Poshmark taxonomy refresh failed")
+                    results["poshmark"] = {"ok": False, "error": str(exc)}
+            else:
+                results["poshmark"] = {
+                    "ok": True,
+                    "skipped": True,
+                    "reason": "fresh",
+                }
 
             ok_any = any(
                 isinstance(value, dict) and value.get("ok") for value in results.values()
@@ -188,7 +201,7 @@ class TaxonomyService:
         if not stale:
             return
         try:
-            await self.refresh(force=True)
+            await self.refresh(force=False)
         except Exception:
             logger.exception("Background taxonomy refresh failed")
 
@@ -276,6 +289,16 @@ class TaxonomyService:
             return True
         return (time.time() - ts) > TAXONOMY_TTL_SEC
 
+    def _key_is_stale(self, key: str) -> bool:
+        tree = self._load(key)
+        return tree is None or self._is_stale(tree)
+
+    def _ebay_is_stale(self) -> bool:
+        return any(
+            self._key_is_stale(f"ebay:{market}")
+            for market in EBAY_MARKETPLACES
+        )
+
     def _ensure_seeds(self) -> None:
         for market in EBAY_MARKETPLACES:
             key = f"ebay:{market}"
@@ -312,13 +335,16 @@ class TaxonomyService:
             "nodes": _poshmark_seed_nodes(),
         }
 
-    async def _refresh_ebay_parser(self) -> dict[str, Any]:
+    async def _refresh_ebay_parser(self, *, force: bool = True) -> dict[str, Any]:
         client = make_parser_client(self._proxy)
         try:
             updated = 0
             total_nodes = 0
             errors: list[str] = []
             for market in EBAY_MARKETPLACES:
+                key = f"ebay:{market}"
+                if not force and not self._key_is_stale(key):
+                    continue
                 try:
                     # Полный expand только для US — остальные быстрее с all-categories.
                     expand = 20 if market == "EBAY_US" else 0
@@ -326,7 +352,7 @@ class TaxonomyService:
                         client, market, max_expand=expand
                     )
                     self._save(
-                        f"ebay:{market}",
+                        key,
                         {
                             "source": "ebay",
                             "marketplace": market,
@@ -368,6 +394,19 @@ class TaxonomyService:
             return {"ok": True, "nodes": len(nodes)}
         finally:
             await client.aclose()
+            try:
+                from bot.providers.etsy_browser import close_browser_if_no_captcha
+
+                await asyncio.wait_for(
+                    close_browser_if_no_captcha(
+                        reason="Etsy taxonomy refresh completed"
+                    ),
+                    timeout=20,
+                )
+            except TimeoutError:
+                logger.warning("Timed out closing Etsy browser after taxonomy refresh")
+            except Exception:
+                logger.exception("Failed to close Etsy browser after taxonomy refresh")
 
     async def _refresh_poshmark_parser(self) -> dict[str, Any]:
         client = make_parser_client(self._proxy)

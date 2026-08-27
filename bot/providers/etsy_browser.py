@@ -16,7 +16,9 @@ _context: Any = None
 _page: Any = None
 _context_proxy: str | None = None
 _html_cache: dict[str, tuple[float, str]] = {}
+_idle_close_task: asyncio.Task[None] | None = None
 HTML_CACHE_TTL_SEC = 60
+DEFAULT_IDLE_CLOSE_SEC = 90
 
 
 class EtsyBrowserError(RuntimeError):
@@ -39,6 +41,13 @@ def _profile_dir() -> Path:
     return Path(
         os.getenv("ETSY_BROWSER_PROFILE_DIR", "/app/data/etsy-browser-profile")
     )
+
+
+def _idle_close_sec() -> int:
+    try:
+        return max(30, int(os.getenv("ETSY_BROWSER_IDLE_CLOSE_SEC", DEFAULT_IDLE_CLOSE_SEC)))
+    except ValueError:
+        return DEFAULT_IDLE_CLOSE_SEC
 
 
 def _clear_profile_locks(profile_dir: Path) -> None:
@@ -162,6 +171,7 @@ async def _get_context(*, proxy: str | None = None):
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
+                "--renderer-process-limit=2",
             ],
             "ignore_default_args": ["--enable-automation"],
             "locale": "en-US",
@@ -215,7 +225,9 @@ async def fetch_search_html(url: str, *, proxy: str | None = None) -> str:
     """Открывает Etsy в постоянном профиле и возвращает HTML."""
     for attempt in range(2):
         try:
-            return await _fetch_search_html_once(url, proxy=proxy)
+            html = await _fetch_search_html_once(url, proxy=proxy)
+            _schedule_idle_close()
+            return html
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -228,6 +240,31 @@ async def fetch_search_html(url: str, *, proxy: str | None = None) -> str:
                 continue
             raise
     raise EtsyBrowserError("Браузер Etsy не восстановился после перезапуска")
+
+
+def _schedule_idle_close() -> None:
+    global _idle_close_task
+    if _idle_close_task is not None:
+        _idle_close_task.cancel()
+    _idle_close_task = asyncio.create_task(
+        _close_browser_after_idle(),
+        name="etsy-browser-idle-close",
+    )
+
+
+async def _close_browser_after_idle() -> None:
+    global _idle_close_task
+    current = asyncio.current_task()
+    try:
+        await asyncio.sleep(_idle_close_sec())
+        await close_browser_if_no_captcha(reason="Etsy browser idle timeout")
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Failed to close idle Etsy browser")
+    finally:
+        if _idle_close_task is current:
+            _idle_close_task = None
 
 
 async def _fetch_search_html_once(url: str, *, proxy: str | None = None) -> str:
@@ -263,9 +300,13 @@ async def _fetch_search_html_once(url: str, *, proxy: str | None = None) -> str:
 
 
 async def restart_browser(*, reason: str = "") -> None:
-    global _playwright, _context, _page, _context_proxy
+    global _playwright, _context, _page, _context_proxy, _idle_close_task
     if reason:
         logger.warning("Restarting Etsy browser: %s", reason)
+    idle_task = _idle_close_task
+    _idle_close_task = None
+    if idle_task is not None and idle_task is not asyncio.current_task():
+        idle_task.cancel()
     async with _lock:
         context = _context
         playwright = _playwright
@@ -295,6 +336,27 @@ async def restart_browser(*, reason: str = "") -> None:
             await _terminate_playwright_processes()
         _clear_profile_locks(_profile_dir())
     logger.info("Etsy browser reset completed")
+
+
+async def close_browser_if_no_captcha(*, reason: str) -> bool:
+    """Освобождает Chromium после фоновой работы, не закрывая открытую CAPTCHA."""
+    async with _navigation_lock:
+        page = _page
+        if page is not None and not page.is_closed():
+            try:
+                urls = [page.url, *(frame.url for frame in page.frames)]
+                if any(
+                    "captcha" in url.lower() or "challenge" in url.lower()
+                    for url in urls
+                ):
+                    logger.info(
+                        "Keeping Etsy browser open because CAPTCHA is active"
+                    )
+                    return False
+            except Exception:
+                logger.debug("Failed to inspect Etsy page before close", exc_info=True)
+        await restart_browser(reason=reason)
+        return True
 
 
 async def close_browser() -> None:

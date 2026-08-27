@@ -1,4 +1,8 @@
+import asyncio
+from unittest.mock import AsyncMock, patch
+
 from bot.services.taxonomy_parsers import (
+    crawl_etsy_categories,
     extract_ebay_category_id,
     parse_ebay_all_categories_html,
     parse_ebay_subcategory_html,
@@ -123,6 +127,33 @@ def test_parse_etsy_categories_html():
     assert by_id["10"]["meta"]["taxonomy_id"] == 10
     assert by_id["1200"]["meta"]["taxonomy_id"] == 1200
     assert any((n.get("meta") or {}).get("slug") == "home-and-living" for n in nodes)
+
+
+def test_etsy_crawl_stops_after_three_blocked_http_responses():
+    html = "<html><body>" + "".join(
+        f'<a href="/c/category-{index}?taxonomy_id={index}">Category {index}</a>'
+        for index in range(1, 7)
+    ) + "</body></html>"
+    fetch = AsyncMock(
+        side_effect=[
+            (html, False),
+            (html, True),
+            (html, True),
+            (html, True),
+        ]
+    )
+
+    with patch("bot.services.taxonomy_parsers._fetch_etsy_html", new=fetch):
+        nodes = asyncio.run(
+            crawl_etsy_categories(
+                AsyncMock(),
+                max_pages=10,
+                delay_sec=0,
+            )
+        )
+
+    assert len(nodes) >= 5
+    assert fetch.await_count == 4
 
 
 def test_poshmark_slug_tree():
