@@ -1,0 +1,1097 @@
+from __future__ import annotations
+
+import json
+import secrets
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+import aiosqlite
+
+from bot.models import PollLog, Search, Source, User, UserStatus
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    telegram_id INTEGER PRIMARY KEY,
+    username TEXT,
+    full_name TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    setup_completed INTEGER NOT NULL DEFAULT 0,
+    enabled_sources TEXT NOT NULL DEFAULT '[]',
+    ebay_marketplace TEXT NOT NULL DEFAULT 'EBAY_US',
+    ebay_deletion_token TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS credentials (
+    telegram_id INTEGER PRIMARY KEY,
+    ebay_client_id_enc TEXT,
+    ebay_client_secret_enc TEXT,
+    etsy_api_key_enc TEXT,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (telegram_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS searches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    keywords TEXT NOT NULL,
+    keywords_normalized TEXT NOT NULL DEFAULT '',
+    group_key TEXT NOT NULL DEFAULT '',
+    max_price REAL,
+    min_price REAL,
+    condition TEXT,
+    buy_it_now INTEGER NOT NULL DEFAULT 1,
+    paused INTEGER NOT NULL DEFAULT 0,
+    filters_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (telegram_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS seen_items (
+    search_id INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    PRIMARY KEY (search_id, item_id),
+    FOREIGN KEY (search_id) REFERENCES searches(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS poll_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    search_id INTEGER,
+    source TEXT NOT NULL,
+    keywords TEXT NOT NULL,
+    status TEXT NOT NULL,
+    found INTEGER NOT NULL DEFAULT 0,
+    new_items INTEGER NOT NULL DEFAULT 0,
+    notified INTEGER NOT NULL DEFAULT 0,
+    message TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (telegram_id) REFERENCES users(telegram_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+CREATE INDEX IF NOT EXISTS idx_searches_user ON searches(telegram_id);
+CREATE INDEX IF NOT EXISTS idx_searches_active ON searches(paused, source);
+CREATE INDEX IF NOT EXISTS idx_seen_first_seen_at ON seen_items(first_seen_at);
+CREATE INDEX IF NOT EXISTS idx_poll_logs_user_created ON poll_logs(telegram_id, created_at DESC);
+"""
+
+
+def _utcnow() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+class Database:
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self._conn: aiosqlite.Connection | None = None
+
+    async def connect(self) -> None:
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        self._conn = await aiosqlite.connect(self.path)
+        self._conn.row_factory = aiosqlite.Row
+        await self._conn.execute("PRAGMA foreign_keys = ON")
+        await self._conn.execute("PRAGMA journal_mode = WAL")
+        await self._conn.execute("PRAGMA synchronous = NORMAL")
+        await self._conn.execute("PRAGMA busy_timeout = 5000")
+        await self._conn.executescript(SCHEMA)
+        await self._migrate_schema()
+        await self._conn.commit()
+
+    async def _migrate_schema(self) -> None:
+        """Добавляет новые колонки в уже существующие БД."""
+        cursor = await self.conn.execute("PRAGMA table_info(credentials)")
+        cols = {row[1] for row in await cursor.fetchall()}
+        if "etsy_api_key_enc" not in cols:
+            await self.conn.execute(
+                "ALTER TABLE credentials ADD COLUMN etsy_api_key_enc TEXT"
+            )
+        cursor = await self.conn.execute("PRAGMA table_info(searches)")
+        search_cols = {row[1] for row in await cursor.fetchall()}
+        if "keywords_normalized" not in search_cols:
+            await self.conn.execute(
+                "ALTER TABLE searches ADD COLUMN keywords_normalized TEXT NOT NULL DEFAULT ''"
+            )
+        if "group_key" not in search_cols:
+            await self.conn.execute(
+                "ALTER TABLE searches ADD COLUMN group_key TEXT NOT NULL DEFAULT ''"
+            )
+        await self.conn.execute(
+            "UPDATE searches SET group_key = 'legacy:' || id WHERE group_key = ''"
+        )
+        cursor = await self.conn.execute(
+            "SELECT id, keywords FROM searches WHERE keywords_normalized = ''"
+        )
+        rows = await cursor.fetchall()
+        if rows:
+            await self.conn.executemany(
+                "UPDATE searches SET keywords_normalized = ? WHERE id = ?",
+                [
+                    (self._normalize_keywords(row["keywords"]), row["id"])
+                    for row in rows
+                ],
+            )
+        await self.conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_searches_duplicate
+            ON searches(telegram_id, source, keywords_normalized)
+            """
+        )
+        await self.conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_searches_group
+            ON searches(telegram_id, group_key)
+            """
+        )
+        await self.conn.execute(
+            """
+            DELETE FROM poll_logs
+            WHERE search_id IS NOT NULL
+              AND id NOT IN (
+                  SELECT MAX(id) FROM poll_logs
+                  WHERE search_id IS NOT NULL
+                  GROUP BY telegram_id, search_id
+              )
+            """
+        )
+        await self.conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_poll_logs_search
+            ON poll_logs(telegram_id, search_id)
+            WHERE search_id IS NOT NULL
+            """
+        )
+
+    async def close(self) -> None:
+        if self._conn is not None:
+            await self._conn.close()
+            self._conn = None
+
+    @property
+    def conn(self) -> aiosqlite.Connection:
+        if self._conn is None:
+            raise RuntimeError("Database is not connected")
+        return self._conn
+
+    # --- users ---
+
+    async def get_user(self, telegram_id: int) -> User | None:
+        cursor = await self.conn.execute(
+            "SELECT * FROM users WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        row = await cursor.fetchone()
+        return self._row_to_user(row) if row else None
+
+    async def upsert_pending_user(
+        self,
+        telegram_id: int,
+        username: str | None,
+        full_name: str | None,
+    ) -> tuple[User, bool]:
+        """Создаёт pending-пользователя. Возвращает (user, created)."""
+        existing = await self.get_user(telegram_id)
+        now = _utcnow()
+        if existing is not None:
+            await self.conn.execute(
+                """
+                UPDATE users
+                SET username = ?, full_name = ?, updated_at = ?
+                WHERE telegram_id = ?
+                """,
+                (username, full_name, now, telegram_id),
+            )
+            await self.conn.commit()
+            user = await self.get_user(telegram_id)
+            assert user is not None
+            return user, False
+
+        token = secrets.token_urlsafe(24)
+        await self.conn.execute(
+            """
+            INSERT INTO users (
+                telegram_id, username, full_name, status, setup_completed,
+                enabled_sources, ebay_marketplace, ebay_deletion_token,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 0, '[]', 'EBAY_US', ?, ?, ?)
+            """,
+            (telegram_id, username, full_name, UserStatus.PENDING.value, token, now, now),
+        )
+        await self.conn.commit()
+        user = await self.get_user(telegram_id)
+        assert user is not None
+        return user, True
+
+    async def set_user_status(self, telegram_id: int, status: UserStatus) -> User | None:
+        await self.conn.execute(
+            "UPDATE users SET status = ?, updated_at = ? WHERE telegram_id = ?",
+            (status.value, _utcnow(), telegram_id),
+        )
+        await self.conn.commit()
+        return await self.get_user(telegram_id)
+
+    async def list_users(self, *, status: UserStatus | None = None) -> list[User]:
+        if status is None:
+            cursor = await self.conn.execute(
+                "SELECT * FROM users ORDER BY created_at DESC"
+            )
+        else:
+            cursor = await self.conn.execute(
+                "SELECT * FROM users WHERE status = ? ORDER BY created_at DESC",
+                (status.value,),
+            )
+        rows = await cursor.fetchall()
+        return [self._row_to_user(row) for row in rows]
+
+    async def save_setup(
+        self,
+        telegram_id: int,
+        *,
+        enabled_sources: list[Source],
+        ebay_marketplace: str = "EBAY_US",
+        setup_completed: bool = True,
+    ) -> User | None:
+        await self.conn.execute(
+            """
+            UPDATE users
+            SET enabled_sources = ?,
+                ebay_marketplace = ?,
+                setup_completed = ?,
+                updated_at = ?
+            WHERE telegram_id = ?
+            """,
+            (
+                json.dumps([s.value for s in enabled_sources]),
+                ebay_marketplace,
+                1 if setup_completed else 0,
+                _utcnow(),
+                telegram_id,
+            ),
+        )
+        await self.conn.commit()
+        return await self.get_user(telegram_id)
+
+    async def ensure_deletion_token(self, telegram_id: int) -> str:
+        user = await self.get_user(telegram_id)
+        if user is None:
+            raise ValueError("User not found")
+        if user.ebay_deletion_token:
+            return user.ebay_deletion_token
+        token = secrets.token_urlsafe(24)
+        await self.conn.execute(
+            "UPDATE users SET ebay_deletion_token = ?, updated_at = ? WHERE telegram_id = ?",
+            (token, _utcnow(), telegram_id),
+        )
+        await self.conn.commit()
+        return token
+
+    # --- credentials ---
+
+    async def save_credentials(
+        self,
+        telegram_id: int,
+        client_id_enc: str,
+        client_secret_enc: str,
+    ) -> None:
+        now = _utcnow()
+        await self.conn.execute(
+            """
+            INSERT INTO credentials (
+                telegram_id, ebay_client_id_enc, ebay_client_secret_enc,
+                etsy_api_key_enc, updated_at
+            )
+            VALUES (?, ?, ?, NULL, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET
+                ebay_client_id_enc = excluded.ebay_client_id_enc,
+                ebay_client_secret_enc = excluded.ebay_client_secret_enc,
+                updated_at = excluded.updated_at
+            """,
+            (telegram_id, client_id_enc, client_secret_enc, now),
+        )
+        await self.conn.commit()
+
+    async def save_etsy_credentials(self, telegram_id: int, api_key_enc: str) -> None:
+        now = _utcnow()
+        await self.conn.execute(
+            """
+            INSERT INTO credentials (
+                telegram_id, ebay_client_id_enc, ebay_client_secret_enc,
+                etsy_api_key_enc, updated_at
+            )
+            VALUES (?, '', '', ?, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET
+                etsy_api_key_enc = excluded.etsy_api_key_enc,
+                updated_at = excluded.updated_at
+            """,
+            (telegram_id, api_key_enc, now),
+        )
+        await self.conn.commit()
+
+    async def get_credentials_enc(self, telegram_id: int) -> tuple[str, str] | None:
+        cursor = await self.conn.execute(
+            """
+            SELECT ebay_client_id_enc, ebay_client_secret_enc
+            FROM credentials WHERE telegram_id = ?
+            """,
+            (telegram_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        client_id = row["ebay_client_id_enc"]
+        client_secret = row["ebay_client_secret_enc"]
+        if not client_id or not client_secret:
+            return None
+        return client_id, client_secret
+
+    async def get_etsy_credentials_enc(self, telegram_id: int) -> str | None:
+        cursor = await self.conn.execute(
+            """
+            SELECT etsy_api_key_enc FROM credentials WHERE telegram_id = ?
+            """,
+            (telegram_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        value = row["etsy_api_key_enc"]
+        return value if value else None
+
+    async def has_credentials(self, telegram_id: int) -> bool:
+        return await self.get_credentials_enc(telegram_id) is not None
+
+    async def has_etsy_credentials(self, telegram_id: int) -> bool:
+        return await self.get_etsy_credentials_enc(telegram_id) is not None
+
+    async def revoke_credentials(self, telegram_id: int) -> bool:
+        """Удаляет только eBay-ключи; строка остаётся, если есть Etsy."""
+        cursor = await self.conn.execute(
+            """
+            UPDATE credentials
+            SET ebay_client_id_enc = NULL,
+                ebay_client_secret_enc = NULL,
+                updated_at = ?
+            WHERE telegram_id = ?
+            """,
+            (_utcnow(), telegram_id),
+        )
+        await self.conn.commit()
+        if cursor.rowcount <= 0:
+            return False
+        await self._cleanup_empty_credentials(telegram_id)
+        return True
+
+    async def revoke_etsy_credentials(self, telegram_id: int) -> bool:
+        cursor = await self.conn.execute(
+            """
+            UPDATE credentials
+            SET etsy_api_key_enc = NULL, updated_at = ?
+            WHERE telegram_id = ?
+            """,
+            (_utcnow(), telegram_id),
+        )
+        await self.conn.commit()
+        if cursor.rowcount <= 0:
+            return False
+        await self._cleanup_empty_credentials(telegram_id)
+        return True
+
+    async def _cleanup_empty_credentials(self, telegram_id: int) -> None:
+        cursor = await self.conn.execute(
+            """
+            SELECT ebay_client_id_enc, ebay_client_secret_enc, etsy_api_key_enc
+            FROM credentials WHERE telegram_id = ?
+            """,
+            (telegram_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return
+        if (
+            not row["ebay_client_id_enc"]
+            and not row["ebay_client_secret_enc"]
+            and not row["etsy_api_key_enc"]
+        ):
+            await self.conn.execute(
+                "DELETE FROM credentials WHERE telegram_id = ?",
+                (telegram_id,),
+            )
+            await self.conn.commit()
+
+    # --- searches ---
+
+    @staticmethod
+    def _normalize_keywords(keywords: str) -> str:
+        return " ".join((keywords or "").strip().split()).casefold()
+
+    async def find_identical_search(
+        self,
+        telegram_id: int,
+        source: Source,
+        keywords: str,
+        *,
+        max_price: float | None = None,
+        min_price: float | None = None,
+        condition: str | None = None,
+        buy_it_now: bool = True,
+        marketplace: str | None = None,
+        exclude_group_key: str | None = None,
+    ) -> Search | None:
+        """Ищет полностью идентичный поиск пользователя."""
+        needle_kw = self._normalize_keywords(keywords)
+        needle_condition = (condition or "").strip() or None
+        needle_market = marketplace if source not in {Source.POSHMARK, Source.ETSY} else None
+        cursor = await self.conn.execute(
+            """
+            SELECT * FROM searches
+            WHERE telegram_id = ?
+              AND source = ?
+              AND keywords_normalized = ?
+              AND (min_price = ? OR (min_price IS NULL AND ? IS NULL))
+              AND (max_price = ? OR (max_price IS NULL AND ? IS NULL))
+              AND COALESCE(NULLIF(TRIM(condition), ''), '') = ?
+              AND buy_it_now = ?
+            ORDER BY id DESC
+            """,
+            (
+                telegram_id,
+                source.value,
+                needle_kw,
+                min_price,
+                min_price,
+                max_price,
+                max_price,
+                needle_condition or "",
+                1 if buy_it_now else 0,
+            ),
+        )
+        for row in await cursor.fetchall():
+            existing = self._row_to_search(row)
+            if exclude_group_key and existing.group_key == exclude_group_key:
+                continue
+            if existing.marketplace != needle_market:
+                continue
+            return existing
+        return None
+
+    async def add_search(
+        self,
+        telegram_id: int,
+        source: Source,
+        keywords: str,
+        *,
+        max_price: float | None = None,
+        min_price: float | None = None,
+        condition: str | None = None,
+        buy_it_now: bool = True,
+        filters_json: dict[str, Any] | None = None,
+        marketplace: str | None = None,
+        group_key: str | None = None,
+    ) -> Search:
+        searches = await self.add_search_group(
+            telegram_id,
+            [source],
+            keywords,
+            max_price=max_price,
+            min_price=min_price,
+            condition=condition,
+            buy_it_now=buy_it_now,
+            filters_json=filters_json,
+            marketplace=marketplace,
+            group_key=group_key,
+        )
+        return searches[0]
+
+    async def add_search_group(
+        self,
+        telegram_id: int,
+        sources: list[Source],
+        keywords: str,
+        *,
+        max_price: float | None = None,
+        min_price: float | None = None,
+        condition: str | None = None,
+        buy_it_now: bool = True,
+        filters_json: dict[str, Any] | None = None,
+        marketplace: str | None = None,
+        group_key: str | None = None,
+        categories_by_source: dict[str, list[dict[str, Any]]] | None = None,
+    ) -> list[Search]:
+        from bot.services.categories import apply_categories_to_filters
+
+        if not sources:
+            raise ValueError("At least one source is required")
+        unique_sources = list(dict.fromkeys(sources))
+        key = group_key or secrets.token_urlsafe(12)
+        now = _utcnow()
+        rows: list[tuple[Any, ...]] = []
+        for source in unique_sources:
+            filters = dict(filters_json or {})
+            source_buy_it_now = buy_it_now
+            if source in {Source.POSHMARK, Source.ETSY}:
+                filters.pop("marketplace", None)
+                source_buy_it_now = False
+            elif marketplace:
+                filters["marketplace"] = marketplace
+            filters = apply_categories_to_filters(
+                filters,
+                source=source,
+                categories_by_source=categories_by_source,
+            )
+            rows.append(
+                (
+                    telegram_id,
+                    source.value,
+                    keywords.strip(),
+                    self._normalize_keywords(keywords),
+                    key,
+                    max_price,
+                    min_price,
+                    condition,
+                    1 if source_buy_it_now else 0,
+                    json.dumps(filters),
+                    now,
+                    now,
+                )
+            )
+        await self.conn.executemany(
+            """
+            INSERT INTO searches (
+                telegram_id, source, keywords, keywords_normalized, group_key, max_price, min_price,
+                condition, buy_it_now, paused, filters_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+            """,
+            rows,
+        )
+        await self.conn.commit()
+        return await self.get_search_group(key, telegram_id)
+
+    async def get_search_group(
+        self,
+        group_key: str,
+        telegram_id: int,
+    ) -> list[Search]:
+        cursor = await self.conn.execute(
+            """
+            SELECT * FROM searches
+            WHERE group_key = ? AND telegram_id = ?
+            ORDER BY id ASC
+            """,
+            (group_key, telegram_id),
+        )
+        return [self._row_to_search(row) for row in await cursor.fetchall()]
+
+    async def get_search_group_by_id(
+        self,
+        search_id: int,
+        telegram_id: int,
+    ) -> list[Search]:
+        search = await self.get_search(search_id)
+        if search is None or search.telegram_id != telegram_id:
+            return []
+        return await self.get_search_group(search.group_key, telegram_id)
+
+    async def get_search(self, search_id: int) -> Search | None:
+        cursor = await self.conn.execute(
+            "SELECT * FROM searches WHERE id = ?",
+            (search_id,),
+        )
+        row = await cursor.fetchone()
+        return self._row_to_search(row) if row else None
+
+    async def list_searches(self, telegram_id: int) -> list[Search]:
+        cursor = await self.conn.execute(
+            """
+            SELECT * FROM searches
+            WHERE telegram_id = ?
+            ORDER BY id DESC
+            """,
+            (telegram_id,),
+        )
+        rows = await cursor.fetchall()
+        return [self._row_to_search(row) for row in rows]
+
+    async def list_active_searches_for_polling(self) -> list[Search]:
+        cursor = await self.conn.execute(
+            """
+            SELECT s.*
+            FROM searches s
+            JOIN users u ON u.telegram_id = s.telegram_id
+            WHERE s.paused = 0
+              AND u.status = ?
+              AND u.setup_completed = 1
+            ORDER BY s.id ASC
+            """,
+            (UserStatus.APPROVED.value,),
+        )
+        rows = await cursor.fetchall()
+        return [self._row_to_search(row) for row in rows]
+
+    async def update_search(
+        self,
+        search_id: int,
+        telegram_id: int,
+        *,
+        keywords: str | None = None,
+        max_price: float | None = None,
+        min_price: float | None = None,
+        condition: str | None = None,
+        buy_it_now: bool | None = None,
+        clear_max_price: bool = False,
+        clear_min_price: bool = False,
+    ) -> Search | None:
+        search = await self.get_search(search_id)
+        if search is None or search.telegram_id != telegram_id:
+            return None
+        new_keywords = keywords if keywords is not None else search.keywords
+        new_max = None if clear_max_price else (max_price if max_price is not None else search.max_price)
+        new_min = None if clear_min_price else (min_price if min_price is not None else search.min_price)
+        new_condition = condition if condition is not None else search.condition
+        new_bin = search.buy_it_now if buy_it_now is None else buy_it_now
+        criteria_changed = any(
+            (
+                keywords is not None,
+                max_price is not None,
+                min_price is not None,
+                condition is not None,
+                buy_it_now is not None,
+                clear_max_price,
+                clear_min_price,
+            )
+        )
+        await self.conn.execute(
+            """
+            UPDATE searches
+            SET keywords = ?, keywords_normalized = ?, max_price = ?, min_price = ?, condition = ?,
+                buy_it_now = ?, updated_at = ?
+            WHERE id = ? AND telegram_id = ?
+            """,
+            (
+                new_keywords,
+                self._normalize_keywords(new_keywords),
+                new_max,
+                new_min,
+                new_condition,
+                1 if new_bin else 0,
+                _utcnow(),
+                search_id,
+                telegram_id,
+            ),
+        )
+        if criteria_changed:
+            await self.conn.execute(
+                "DELETE FROM seen_items WHERE search_id = ?",
+                (search_id,),
+            )
+        await self.conn.commit()
+        return await self.get_search(search_id)
+
+    async def update_search_group(
+        self,
+        search_id: int,
+        telegram_id: int,
+        *,
+        sources: list[Source] | None = None,
+        keywords: str | None = None,
+        max_price: float | None = None,
+        min_price: float | None = None,
+        condition: str | None = None,
+        buy_it_now: bool | None = None,
+        clear_max_price: bool = False,
+        clear_min_price: bool = False,
+        marketplace: str | None = None,
+        categories_by_source: dict[str, list[dict[str, Any]]] | None = None,
+        update_categories: bool = False,
+    ) -> list[Search]:
+        from bot.services.categories import (
+            apply_categories_to_filters,
+            categories_equal,
+            categories_for_search,
+        )
+
+        group = await self.get_search_group_by_id(search_id, telegram_id)
+        if not group:
+            return []
+        base = group[0]
+        target_sources = list(dict.fromkeys(sources or [item.source for item in group]))
+        if not target_sources:
+            raise ValueError("At least one source is required")
+        new_keywords = keywords if keywords is not None else base.keywords
+        new_max = None if clear_max_price else (
+            max_price if max_price is not None else base.max_price
+        )
+        new_min = None if clear_min_price else (
+            min_price if min_price is not None else base.min_price
+        )
+        new_condition = condition if condition is not None else base.condition
+        new_bin = base.buy_it_now if buy_it_now is None else buy_it_now
+        categories_changed = False
+        if update_categories:
+            for source in target_sources:
+                existing = next((item for item in group if item.source is source), None)
+                old_cats = (
+                    categories_for_search(existing.filters_json, source)
+                    if existing is not None
+                    else []
+                )
+                new_filters = apply_categories_to_filters(
+                    {},
+                    source=source,
+                    categories_by_source=categories_by_source or {},
+                )
+                new_cats = categories_for_search(new_filters, source)
+                if not categories_equal(old_cats, new_cats, source=source):
+                    categories_changed = True
+                    break
+        criteria_changed = any(
+            (
+                keywords is not None,
+                max_price is not None,
+                min_price is not None,
+                condition is not None,
+                buy_it_now is not None,
+                clear_max_price,
+                clear_min_price,
+                categories_changed,
+            )
+        )
+        now = _utcnow()
+        await self.conn.execute(
+            """
+            UPDATE searches
+            SET keywords = ?, keywords_normalized = ?, max_price = ?,
+                min_price = ?, condition = ?, updated_at = ?
+            WHERE group_key = ? AND telegram_id = ?
+            """,
+            (
+                new_keywords,
+                self._normalize_keywords(new_keywords),
+                new_max,
+                new_min,
+                new_condition,
+                now,
+                base.group_key,
+                telegram_id,
+            ),
+        )
+        existing_by_source = {item.source: item for item in group}
+        for source, existing in existing_by_source.items():
+            if source not in target_sources:
+                await self.conn.execute(
+                    "DELETE FROM searches WHERE id = ?",
+                    (existing.id,),
+                )
+                continue
+            filters = dict(existing.filters_json)
+            source_bin = new_bin
+            if source in {Source.POSHMARK, Source.ETSY}:
+                filters.pop("marketplace", None)
+                source_bin = False
+            elif marketplace:
+                filters["marketplace"] = marketplace
+            if update_categories:
+                filters = apply_categories_to_filters(
+                    filters,
+                    source=source,
+                    categories_by_source=categories_by_source or {},
+                )
+            await self.conn.execute(
+                """
+                UPDATE searches
+                SET buy_it_now = ?, filters_json = ?
+                WHERE id = ?
+                """,
+                (1 if source_bin else 0, json.dumps(filters), existing.id),
+            )
+        missing_sources = [
+            source for source in target_sources if source not in existing_by_source
+        ]
+        for source in missing_sources:
+            filters: dict[str, Any] = {}
+            source_bin = new_bin
+            if source in {Source.POSHMARK, Source.ETSY}:
+                source_bin = False
+            elif marketplace:
+                filters["marketplace"] = marketplace
+            if update_categories:
+                filters = apply_categories_to_filters(
+                    filters,
+                    source=source,
+                    categories_by_source=categories_by_source or {},
+                )
+            await self.conn.execute(
+                """
+                INSERT INTO searches (
+                    telegram_id, source, keywords, keywords_normalized, group_key,
+                    max_price, min_price, condition, buy_it_now, paused,
+                    filters_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    telegram_id,
+                    source.value,
+                    new_keywords.strip(),
+                    self._normalize_keywords(new_keywords),
+                    base.group_key,
+                    new_max,
+                    new_min,
+                    new_condition,
+                    1 if source_bin else 0,
+                    1 if base.paused else 0,
+                    json.dumps(filters),
+                    now,
+                    now,
+                ),
+            )
+        if criteria_changed:
+            await self.conn.execute(
+                """
+                DELETE FROM seen_items
+                WHERE search_id IN (
+                    SELECT id FROM searches
+                    WHERE group_key = ? AND telegram_id = ?
+                )
+                """,
+                (base.group_key, telegram_id),
+            )
+        await self.conn.commit()
+        return await self.get_search_group(base.group_key, telegram_id)
+
+    async def set_search_group_paused(
+        self,
+        search_id: int,
+        telegram_id: int,
+        paused: bool,
+    ) -> bool:
+        search = await self.get_search(search_id)
+        if search is None or search.telegram_id != telegram_id:
+            return False
+        cursor = await self.conn.execute(
+            """
+            UPDATE searches
+            SET paused = ?, updated_at = ?
+            WHERE group_key = ? AND telegram_id = ?
+            """,
+            (1 if paused else 0, _utcnow(), search.group_key, telegram_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def delete_search_group(self, search_id: int, telegram_id: int) -> bool:
+        search = await self.get_search(search_id)
+        if search is None or search.telegram_id != telegram_id:
+            return False
+        cursor = await self.conn.execute(
+            "DELETE FROM searches WHERE group_key = ? AND telegram_id = ?",
+            (search.group_key, telegram_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def set_search_paused(
+        self, search_id: int, telegram_id: int, paused: bool
+    ) -> bool:
+        cursor = await self.conn.execute(
+            """
+            UPDATE searches
+            SET paused = ?, updated_at = ?
+            WHERE id = ? AND telegram_id = ?
+            """,
+            (1 if paused else 0, _utcnow(), search_id, telegram_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def delete_search(self, search_id: int, telegram_id: int) -> bool:
+        cursor = await self.conn.execute(
+            "DELETE FROM searches WHERE id = ? AND telegram_id = ?",
+            (search_id, telegram_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount > 0
+
+    # --- seen items ---
+
+    async def mark_seen(self, search_id: int, item_ids: list[str]) -> None:
+        if not item_ids:
+            return
+        now = _utcnow()
+        await self.conn.executemany(
+            """
+            INSERT OR IGNORE INTO seen_items (search_id, item_id, first_seen_at)
+            VALUES (?, ?, ?)
+            """,
+            [(search_id, item_id, now) for item_id in item_ids],
+        )
+        await self.conn.commit()
+
+    async def filter_new_ids(self, search_id: int, item_ids: list[str]) -> list[str]:
+        if not item_ids:
+            return []
+        placeholders = ",".join("?" for _ in item_ids)
+        cursor = await self.conn.execute(
+            f"""
+            SELECT item_id FROM seen_items
+            WHERE search_id = ? AND item_id IN ({placeholders})
+            """,
+            (search_id, *item_ids),
+        )
+        rows = await cursor.fetchall()
+        known = {row["item_id"] for row in rows}
+        return [item_id for item_id in item_ids if item_id not in known]
+
+    async def count_seen(self, search_id: int) -> int:
+        cursor = await self.conn.execute(
+            "SELECT COUNT(*) AS c FROM seen_items WHERE search_id = ?",
+            (search_id,),
+        )
+        row = await cursor.fetchone()
+        return int(row["c"]) if row else 0
+
+    async def has_seen(self, search_id: int) -> bool:
+        cursor = await self.conn.execute(
+            "SELECT 1 FROM seen_items WHERE search_id = ? LIMIT 1",
+            (search_id,),
+        )
+        return await cursor.fetchone() is not None
+
+    async def cleanup_seen_items(self, ttl_days: int) -> int:
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=ttl_days)
+        ).replace(microsecond=0).isoformat()
+        cursor = await self.conn.execute(
+            """
+            DELETE FROM seen_items
+            WHERE first_seen_at < ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM searches
+                  WHERE searches.id = seen_items.search_id
+                    AND searches.paused = 0
+              )
+            """,
+            (cutoff,),
+        )
+        await self.conn.commit()
+        return cursor.rowcount
+
+    # --- poll logs ---
+
+    async def clear_poll_logs(self, telegram_id: int) -> None:
+        """Удаляет все записи лога опросов пользователя (перед новым циклом)."""
+        await self.conn.execute(
+            "DELETE FROM poll_logs WHERE telegram_id = ?",
+            (telegram_id,),
+        )
+        await self.conn.commit()
+
+    async def add_poll_log(
+        self,
+        telegram_id: int,
+        *,
+        search_id: int | None,
+        source: Source,
+        keywords: str,
+        status: str,
+        found: int = 0,
+        new_items: int = 0,
+        notified: int = 0,
+        message: str | None = None,
+    ) -> None:
+        await self.conn.execute(
+            """
+            INSERT INTO poll_logs (
+                telegram_id, search_id, source, keywords, status,
+                found, new_items, notified, message, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(telegram_id, search_id) WHERE search_id IS NOT NULL
+            DO UPDATE SET
+                source = excluded.source,
+                keywords = excluded.keywords,
+                status = excluded.status,
+                found = excluded.found,
+                new_items = excluded.new_items,
+                notified = excluded.notified,
+                message = excluded.message,
+                created_at = excluded.created_at
+            """,
+            (
+                telegram_id,
+                search_id,
+                source.value,
+                keywords,
+                status,
+                found,
+                new_items,
+                notified,
+                (message or "")[:500] or None,
+                _utcnow(),
+            ),
+        )
+        await self.conn.commit()
+
+    async def list_poll_logs(self, telegram_id: int, *, limit: int = 100) -> list[PollLog]:
+        cursor = await self.conn.execute(
+            """
+            SELECT * FROM poll_logs
+            WHERE telegram_id = ?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (telegram_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [self._row_to_poll_log(row) for row in rows]
+
+    # --- mappers ---
+
+    @staticmethod
+    def _row_to_user(row: aiosqlite.Row) -> User:
+        sources_raw = json.loads(row["enabled_sources"] or "[]")
+        sources = [Source(s) for s in sources_raw]
+        return User(
+            telegram_id=row["telegram_id"],
+            username=row["username"],
+            full_name=row["full_name"],
+            status=UserStatus(row["status"]),
+            setup_completed=bool(row["setup_completed"]),
+            enabled_sources=sources,
+            ebay_marketplace=row["ebay_marketplace"] or "EBAY_US",
+            ebay_deletion_token=row["ebay_deletion_token"],
+        )
+
+    @staticmethod
+    def _row_to_search(row: aiosqlite.Row) -> Search:
+        return Search(
+            id=row["id"],
+            telegram_id=row["telegram_id"],
+            source=Source(row["source"]),
+            keywords=row["keywords"],
+            group_key=row["group_key"],
+            max_price=row["max_price"],
+            min_price=row["min_price"],
+            condition=row["condition"],
+            buy_it_now=bool(row["buy_it_now"]),
+            paused=bool(row["paused"]),
+            filters_json=json.loads(row["filters_json"] or "{}"),
+        )
+
+    @staticmethod
+    def _row_to_poll_log(row: aiosqlite.Row) -> PollLog:
+        return PollLog(
+            id=row["id"],
+            telegram_id=row["telegram_id"],
+            search_id=row["search_id"],
+            source=Source(row["source"]),
+            keywords=row["keywords"],
+            status=row["status"],
+            found=int(row["found"] or 0),
+            new_items=int(row["new_items"] or 0),
+            notified=int(row["notified"] or 0),
+            message=row["message"],
+            created_at=row["created_at"],
+        )

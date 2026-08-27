@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>DecoParser</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/app/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="top">
+      <div class="brand">
+        <p class="brand-mark">DECOTIC</p>
+        <p class="eyebrow">Vintage · Monitoring · Categories</p>
+        <h1 id="greeting">Загрузка…</h1>
+      </div>
+      <button id="btn-refresh" class="ghost" type="button" aria-label="Обновить">↻</button>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="searches" type="button">Поиски</button>
+      <button class="tab" data-tab="create" type="button">Новый</button>
+      <button class="tab" data-tab="logs" type="button">Лог</button>
+      <button class="tab" data-tab="settings" type="button">Настройки</button>
+    </nav>
+
+    <main>
+      <section id="panel-searches" class="panel active">
+        <p class="hint">Категории задаются в «Новый» или «Изменить» → кнопка «Категории».</p>
+        <div id="searches-empty" class="empty hidden">
+          <p>Поисков пока нет</p>
+          <button type="button" class="primary" data-go="create">Создать первый</button>
+        </div>
+        <div id="searches-list" class="list"></div>
+      </section>
+
+      <section id="panel-create" class="panel">
+        <form id="form-create" class="form">
+          <fieldset class="source-picker">
+            <legend>Источники</legend>
+            <div id="create-sources" class="sources sources-compact"></div>
+          </fieldset>
+          <label>
+            Ключевые слова
+            <input id="create-keywords" type="text" placeholder="nike dunk low" required minlength="2" />
+          </label>
+          <div class="row">
+            <label>
+              Цена от
+              <input id="create-min" type="number" min="0" step="0.01" placeholder="—" />
+            </label>
+            <label>
+              Цена до
+              <input id="create-max" type="number" min="0" step="0.01" placeholder="—" />
+            </label>
+          </div>
+          <label id="create-marketplace-wrap">
+            Регион eBay
+            <select id="create-marketplace"></select>
+          </label>
+          <label class="check" id="create-bin-wrap">
+            <input id="create-bin" type="checkbox" checked />
+            Только Buy It Now (eBay)
+          </label>
+          <div class="category-cta">
+            <button id="btn-create-categories" class="primary" type="button">Категории · не заданы</button>
+            <p class="hint">Отдельный экран: несколько категорий на источник, поиск и дерево.</p>
+          </div>
+          <button class="primary" type="submit">Создать поиск</button>
+        </form>
+      </section>
+
+      <section id="panel-categories" class="panel">
+        <div class="categories-head">
+          <button id="btn-categories-back" class="chip" type="button">← Назад</button>
+          <h2 class="section-title">Категории поиска</h2>
+        </div>
+        <p class="hint">Несколько категорий на источник — через «Добавить». Пусто = все категории. Поиск по названию или дерево.</p>
+        <div id="categories-blocks" class="categories-blocks"></div>
+        <button id="btn-categories-done" class="primary" type="button">Готово</button>
+      </section>
+
+      <section id="panel-logs" class="panel">
+        <p class="hint">Результат последнего цикла опроса по вашим поискам.</p>
+        <div id="logs-empty" class="empty hidden">
+          <p>Записей пока нет</p>
+          <p class="hint">Появятся после следующего цикла опроса (~5 мин).</p>
+        </div>
+        <div id="logs-list" class="list log-list"></div>
+      </section>
+
+      <section id="panel-settings" class="panel">
+        <form id="form-settings" class="form">
+          <p class="hint">Выберите источники. eBay API — с ключами; Etsy — через Playwright без ключа (ключ опционален).</p>
+          <div id="sources-box" class="sources"></div>
+
+          <div id="ebay-api-block" class="ebay-block hidden">
+            <h2 class="section-title">eBay API</h2>
+            <ol id="ebay-checklist" class="checklist"></ol>
+            <label>
+              Client ID (App ID)
+              <input id="ebay-client-id" type="text" autocomplete="off" placeholder="вставьте App ID" />
+            </label>
+            <label>
+              Client Secret (Cert ID)
+              <input id="ebay-client-secret" type="password" autocomplete="off" placeholder="вставьте Cert ID" />
+            </label>
+            <p class="hint">Секрет не сохраняется в браузере — уходит на сервер зашифрованным после OAuth-проверки.</p>
+            <label>
+              Marketplace
+              <select id="ebay-marketplace"></select>
+            </label>
+            <div id="deletion-box" class="deletion hidden">
+              <h3 class="section-title">Marketplace Account Deletion</h3>
+              <p class="hint">Укажите в developer.ebay.com для Production keyset:</p>
+              <label>
+                URL
+                <input id="deletion-url" type="text" readonly />
+              </label>
+              <label>
+                Verification token
+                <input id="deletion-token" type="text" readonly />
+              </label>
+              <button type="button" class="chip" id="btn-copy-deletion">Скопировать URL + token</button>
+            </div>
+            <p id="keys-status" class="hint"></p>
+            <button type="button" class="chip danger" id="btn-revoke-keys">Удалить eBay ключи</button>
+          </div>
+
+          <div id="etsy-api-block" class="ebay-block hidden">
+            <h2 class="section-title">Etsy</h2>
+            <ol id="etsy-checklist" class="checklist"></ol>
+            <p class="hint">По умолчанию поиск идёт через Playwright (браузер на сервере) — ключ не нужен.</p>
+            <label>
+              Keystring (опционально)
+              <input id="etsy-keystring" type="text" autocomplete="off" placeholder="необязательно" />
+            </label>
+            <label>
+              Shared Secret (опционально)
+              <input id="etsy-shared-secret" type="password" autocomplete="off" placeholder="необязательно" />
+            </label>
+            <p id="etsy-keys-status" class="hint"></p>
+            <button type="button" class="chip danger" id="btn-revoke-etsy-keys">Удалить Etsy ключ</button>
+          </div>
+
+          <div class="ebay-block">
+            <h2 class="section-title">Каталоги категорий</h2>
+            <p class="hint">Автообновление раз в месяц. Каталоги собираются парсером с публичных страниц площадок — ключи не нужны. Обновление может занять несколько минут.</p>
+            <p id="categories-status" class="hint"></p>
+            <button type="button" class="chip" id="btn-refresh-categories">Обновить каталоги категорий</button>
+          </div>
+
+          <button class="primary" type="submit">Сохранить настройки</button>
+        </form>
+      </section>
+    </main>
+
+    <dialog id="edit-dialog">
+      <form id="form-edit" class="form" method="dialog">
+        <h2 class="section-title">Изменить поиск</h2>
+        <input id="edit-id" type="hidden" />
+        <fieldset class="source-picker">
+          <legend>Источники</legend>
+          <div id="edit-sources" class="sources sources-compact"></div>
+        </fieldset>
+        <label>
+          Ключевые слова
+          <input id="edit-keywords" type="text" minlength="2" maxlength="200" required />
+        </label>
+        <div class="row">
+          <label>
+            Цена от
+            <input id="edit-min" type="number" min="0" step="0.01" />
+          </label>
+          <label>
+            Цена до
+            <input id="edit-max" type="number" min="0" step="0.01" />
+          </label>
+        </div>
+        <label id="edit-marketplace-wrap" class="hidden">
+          Регион eBay
+          <select id="edit-marketplace"></select>
+        </label>
+        <label class="check hidden" id="edit-bin-wrap">
+          <input id="edit-bin" type="checkbox" />
+          Только Buy It Now (eBay)
+        </label>
+        <button id="btn-edit-categories" class="primary" type="button">Категории · не заданы</button>
+        <div class="actions">
+          <button class="primary" type="submit">Сохранить</button>
+          <button class="chip" id="btn-edit-cancel" type="button">Отмена</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="tree-dialog">
+      <div class="tree-dialog-body">
+        <div class="categories-head">
+          <h2 class="section-title" id="tree-dialog-title">Дерево категорий</h2>
+          <button id="btn-tree-close" class="chip" type="button">Закрыть</button>
+        </div>
+        <div id="tree-root" class="category-tree"></div>
+      </div>
+    </dialog>
+
+    <div id="toast" class="toast hidden"></div>
+    <div id="error-screen" class="error-screen hidden">
+      <h2>Нет доступа</h2>
+      <p id="error-text"></p>
+      <p class="hint">Откройте <span id="bot-username">бота</span> и нажмите /start</p>
+    </div>
+  </div>
+  <script src="/app/app.js"></script>
+</body>
+</html>

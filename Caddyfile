@@ -1,0 +1,55 @@
+# Caddy обслуживает Mini App на стандартных HTTP/HTTPS-портах.
+http://{$XUI_ACME_HOST} {
+	handle /.well-known/acme-challenge/* {
+		root * /srv/acme-challenge
+		file_server
+	}
+	respond 404
+}
+
+http://{$MINIAPP_DOMAIN} {
+	redir https://{$MINIAPP_DOMAIN}{uri} permanent
+}
+
+https://{$MINIAPP_DOMAIN} {
+	encode gzip
+
+	handle_path /{$ETSY_NOVNC_TOKEN}/* {
+		forward_auth bot:8080 {
+			uri /internal/etsy-vnc-auth
+			# Auth-запрос должен оставаться обычным HTTP. Иначе Upgrade
+			# превращает его в WebSocket к FastAPI, который отвечает 403.
+			header_up -Connection
+			header_up -Upgrade
+		}
+		reverse_proxy bot:6080
+	}
+
+	handle /app* {
+		header {
+			Referrer-Policy "same-origin"
+			X-Content-Type-Options "nosniff"
+			X-Frame-Options "SAMEORIGIN"
+			Permissions-Policy "camera=(), microphone=(), geolocation=()"
+			Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+			Pragma "no-cache"
+		}
+		reverse_proxy bot:8080
+	}
+
+	handle {
+		header {
+			Referrer-Policy "same-origin"
+			X-Content-Type-Options "nosniff"
+			X-Frame-Options "SAMEORIGIN"
+			Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		}
+		reverse_proxy bot:8080
+	}
+}
+
+# gRPC-транспорт Xray/VPN. Upstream слушает только Docker host,
+# TLS и публичный домен обслуживает Caddy.
+edge.decotic-shop.com {
+	reverse_proxy h2c://172.17.0.1:2053
+}
