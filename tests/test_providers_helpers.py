@@ -11,6 +11,7 @@ from bot.providers.etsy import (
     _parse_api_listings,
     _parse_search_html,
 )
+from bot.providers.etsy_browser import _is_browser_failure_error
 from bot.providers.http_utils import (
     BROWSER_HEADERS,
     parse_price_text,
@@ -42,6 +43,15 @@ class HelpersTests(unittest.TestCase):
 
     def test_etsy_datadome_marker(self):
         self.assertTrue(_looks_like_datadome("<!-- DATADOME_CHALLENGE -->"))
+
+    def test_etsy_browser_crash_is_recoverable(self):
+        self.assertTrue(_is_browser_failure_error(RuntimeError("Page crashed")))
+        self.assertTrue(
+            _is_browser_failure_error(
+                RuntimeError("Target page, context or browser has been closed")
+            )
+        )
+        self.assertFalse(_is_browser_failure_error(RuntimeError("HTTP 403")))
 
     def test_etsy_parse_search_html(self):
         html = """

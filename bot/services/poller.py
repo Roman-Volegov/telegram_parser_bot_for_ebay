@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.cards import send_listing_card
 from bot.db import Database
-from bot.models import Search, Source, User
+from bot.models import Listing, Search, Source, User
 from bot.providers import ProviderError, get_provider
 from bot.providers.base import BaseProvider
 from bot.services.credentials import CredentialsService
@@ -17,6 +17,8 @@ from bot.services.etsy_access import EtsyVncAccess
 
 logger = logging.getLogger(__name__)
 ETSY_CAPTCHA_NOTIFICATION_COOLDOWN_SEC = 1800
+ETSY_SEARCH_TIMEOUT_SEC = 150
+ETSY_BROWSER_RESTART_TIMEOUT_SEC = 20
 
 
 class PollerService:
@@ -185,7 +187,22 @@ class PollerService:
             return 0
         try:
             try:
-                listings = await provider.search(search, limit=20)
+                if search.source is Source.ETSY:
+                    listings = await self._search_etsy_with_timeout(
+                        provider,
+                        search,
+                    )
+                else:
+                    listings = await provider.search(search, limit=20)
+            except TimeoutError:
+                message = (
+                    f"Etsy не ответил за {ETSY_SEARCH_TIMEOUT_SEC} сек. "
+                    "Браузер перезапущен, поиск повторится в следующем цикле."
+                )
+                logger.error("Etsy timeout search #%s; restarting browser", search.id)
+                await write_log(status="error", message=message)
+                await self._restart_etsy_browser(reason=f"search #{search.id} timeout")
+                return 0
             except ProviderError as exc:
                 logger.warning("Provider error search #%s: %s", search.id, exc)
                 await write_log(status="error", message=str(exc)[:400])
@@ -280,6 +297,50 @@ class PollerService:
             else "Новые найдены, уведомления не отправлены",
         )
         return sent
+
+    async def _search_etsy_with_timeout(
+        self,
+        provider: BaseProvider,
+        search: Search,
+    ) -> list[Listing]:
+        # asyncio.wait_for ждёт завершения отмены и само может зависнуть на
+        # оборванном Playwright pipe после OOM. asyncio.wait даёт жёсткий лимит.
+        task = asyncio.create_task(
+            provider.search(search, limit=20),
+            name=f"etsy-search-{search.id}",
+        )
+        done, _ = await asyncio.wait(
+            {task},
+            timeout=ETSY_SEARCH_TIMEOUT_SEC,
+        )
+        if task in done:
+            return task.result()
+        task.cancel()
+
+        def consume_result(finished: asyncio.Task) -> None:
+            try:
+                finished.result()
+            except BaseException:
+                pass
+
+        task.add_done_callback(consume_result)
+        raise TimeoutError
+
+    async def _restart_etsy_browser(self, *, reason: str) -> None:
+        try:
+            from bot.providers.etsy_browser import restart_browser
+
+            await asyncio.wait_for(
+                restart_browser(reason=reason),
+                timeout=ETSY_BROWSER_RESTART_TIMEOUT_SEC,
+            )
+        except TimeoutError:
+            logger.error(
+                "Etsy browser restart timed out after %ss",
+                ETSY_BROWSER_RESTART_TIMEOUT_SEC,
+            )
+        except Exception:
+            logger.exception("Etsy browser restart failed")
 
     async def send_etsy_captcha_link(
         self,

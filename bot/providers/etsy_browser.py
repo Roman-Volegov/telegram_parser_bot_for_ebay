@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import signal
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +66,72 @@ def _is_profile_busy_error(exc: BaseException) -> bool:
     )
 
 
+def _is_browser_failure_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "page crashed",
+            "target page, context or browser has been closed",
+            "browser has been closed",
+            "browser closed",
+            "connection closed",
+            "connection is closed",
+        )
+    )
+
+
+def _purge_expired_cache(now: float) -> None:
+    expired = [url for url, (expires_at, _) in _html_cache.items() if expires_at <= now]
+    for url in expired:
+        _html_cache.pop(url, None)
+
+
+def _playwright_process_ids() -> list[int]:
+    """PID процессов Chrome/Playwright внутри текущего контейнера."""
+    own_pid = os.getpid()
+    result: list[int] = []
+    proc = Path("/proc")
+    if not proc.exists():
+        return result
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == own_pid:
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(
+                "utf-8", errors="ignore"
+            )
+        except OSError:
+            continue
+        if (
+            "/ms-playwright/" in cmdline
+            or "playwright/driver/node" in cmdline
+        ):
+            result.append(pid)
+    return result
+
+
+async def _terminate_playwright_processes() -> None:
+    pids = _playwright_process_ids()
+    if not pids:
+        return
+    logger.warning("Terminating stale Etsy browser processes: %s", pids)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            pass
+    await asyncio.sleep(0.5)
+    for pid in _playwright_process_ids():
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
 async def _get_context(*, proxy: str | None = None):
     global _playwright, _context, _page, _context_proxy
     async with _lock:
@@ -77,7 +144,7 @@ async def _get_context(*, proxy: str | None = None):
             ):
                 return _context
             try:
-                await _context.close()
+                await asyncio.wait_for(_context.close(), timeout=5)
             except Exception:
                 logger.debug("Stale Etsy browser close failed", exc_info=True)
             _context = None
@@ -146,8 +213,27 @@ async def _get_context(*, proxy: str | None = None):
 
 async def fetch_search_html(url: str, *, proxy: str | None = None) -> str:
     """Открывает Etsy в постоянном профиле и возвращает HTML."""
+    for attempt in range(2):
+        try:
+            return await _fetch_search_html_once(url, proxy=proxy)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if attempt == 0 and _is_browser_failure_error(exc):
+                logger.warning(
+                    "Etsy browser crashed during navigation; restarting",
+                    exc_info=True,
+                )
+                await restart_browser(reason=str(exc)[:200])
+                continue
+            raise
+    raise EtsyBrowserError("Браузер Etsy не восстановился после перезапуска")
+
+
+async def _fetch_search_html_once(url: str, *, proxy: str | None = None) -> str:
     global _page
     now = asyncio.get_running_loop().time()
+    _purge_expired_cache(now)
     cached = _html_cache.get(url)
     if cached and cached[0] > now:
         return cached[1]
@@ -176,20 +262,40 @@ async def fetch_search_html(url: str, *, proxy: str | None = None) -> str:
         return html
 
 
-async def close_browser() -> None:
+async def restart_browser(*, reason: str = "") -> None:
     global _playwright, _context, _page, _context_proxy
+    if reason:
+        logger.warning("Restarting Etsy browser: %s", reason)
     async with _lock:
-        if _context is not None:
+        context = _context
+        playwright = _playwright
+        # Сначала убрать ссылки на повреждённый браузер, чтобы следующий
+        # запрос не переиспользовал контекст после OOM/краша renderer.
+        _context = None
+        _page = None
+        _context_proxy = None
+        _playwright = None
+        _html_cache.clear()
+        graceful = True
+        if context is not None:
             try:
-                await _context.close()
+                await asyncio.wait_for(context.close(), timeout=5)
             except Exception:
                 logger.debug("Playwright browser close failed", exc_info=True)
-            _context = None
-            _page = None
-            _context_proxy = None
-        if _playwright is not None:
+                graceful = False
+        if playwright is not None:
             try:
-                await _playwright.stop()
+                await asyncio.wait_for(playwright.stop(), timeout=5)
             except Exception:
                 logger.debug("Playwright stop failed", exc_info=True)
-            _playwright = None
+                graceful = False
+        # После OOM driver может считать browser connected, хотя renderer уже
+        # убит. Удаляем оставшиеся процессы и lock-файлы профиля.
+        if not graceful or _playwright_process_ids():
+            await _terminate_playwright_processes()
+        _clear_profile_locks(_profile_dir())
+    logger.info("Etsy browser reset completed")
+
+
+async def close_browser() -> None:
+    await restart_browser(reason="application shutdown")

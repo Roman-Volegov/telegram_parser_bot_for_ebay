@@ -51,6 +51,11 @@ class FakeProvider(BaseProvider):
         self.closed = True
 
 
+class HangingProvider(FakeProvider):
+    async def search(self, search, *, limit=20):
+        await asyncio.Event().wait()
+
+
 class FakeAccess:
     def create_ticket_url(self):
         return "https://example.com/ticket"
@@ -171,3 +176,26 @@ class PollerTests(unittest.IsolatedAsyncioTestCase):
         await poller.process_search(search, notify=True)
         self.bot.send_message.assert_awaited_once()
         self.assertEqual(self.bot.send_message.await_args.args[0], 42)
+
+    async def test_etsy_timeout_restarts_browser_and_returns(self):
+        provider = HangingProvider()
+        search = Search(
+            id=4,
+            telegram_id=42,
+            source=Source.ETSY,
+            keywords="ring",
+        )
+        self.poller._build_provider = AsyncMock(return_value=provider)
+        restart = AsyncMock()
+
+        with (
+            patch("bot.services.poller.ETSY_SEARCH_TIMEOUT_SEC", 0.01),
+            patch("bot.providers.etsy_browser.restart_browser", new=restart),
+        ):
+            result = await self.poller.process_search(search, notify=True)
+
+        self.assertEqual(result, 0)
+        self.assertTrue(provider.closed)
+        restart.assert_awaited_once_with(reason="search #4 timeout")
+        self.assertEqual(self.db.logs[-1]["status"], "error")
+        self.assertIn("Браузер перезапущен", self.db.logs[-1]["message"])
