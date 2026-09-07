@@ -352,6 +352,13 @@ class PollerService:
         if not self.etsy_vnc_access:
             logger.error("Etsy CAPTCHA link requested but ETSY_NOVNC_TOKEN is not configured")
             return None
+        if not await self._prepare_etsy_captcha_browser():
+            await self.bot.send_message(
+                telegram_id,
+                "Не удалось запустить браузер Etsy. Попробуйте команду "
+                "/etsy_captcha ещё раз через минуту.",
+            )
+            return None
         url = self.etsy_vnc_access.create_ticket_url()
         try:
             await self.bot.send_message(
@@ -409,6 +416,21 @@ class PollerService:
                 - (now - self._etsy_captcha_notified_at),
             )
             return
+        if not await self._prepare_etsy_captcha_browser():
+            for telegram_id in sorted(recipients):
+                try:
+                    await self.bot.send_message(
+                        telegram_id,
+                        "Etsy запросил проверку, но браузер не запустился. "
+                        "Попробуйте /etsy_captcha ещё раз через минуту.",
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to report Etsy browser startup failure to user=%s",
+                        telegram_id,
+                    )
+            self._etsy_captcha_notified_at = now
+            return
         sent = False
         for telegram_id in sorted(recipients):
             try:
@@ -440,6 +462,21 @@ class PollerService:
             )
         else:
             logger.error("Etsy CAPTCHA link was not delivered to any recipient")
+
+    async def _prepare_etsy_captcha_browser(self) -> bool:
+        try:
+            from bot.providers.etsy_browser import prepare_captcha_browser
+
+            await asyncio.wait_for(
+                prepare_captcha_browser(proxy=self.proxy or None),
+                timeout=45,
+            )
+            return True
+        except TimeoutError:
+            logger.error("Timed out preparing Etsy browser for CAPTCHA access")
+        except Exception:
+            logger.exception("Failed to prepare Etsy browser for CAPTCHA access")
+        return False
 
     async def _build_provider(self, user: User, search: Search) -> BaseProvider:
         if search.source is Source.EBAY_API:

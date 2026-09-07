@@ -145,6 +145,7 @@ class PollerTests(unittest.IsolatedAsyncioTestCase):
                 error=ProviderError("captcha", code="ETSY_CAPTCHA")
             )
         )
+        poller._prepare_etsy_captcha_browser = AsyncMock(return_value=True)
 
         await poller.process_search(search, notify=True)
 
@@ -173,9 +174,44 @@ class PollerTests(unittest.IsolatedAsyncioTestCase):
                 error=ProviderError("captcha", code="ETSY_CAPTCHA")
             )
         )
+        poller._prepare_etsy_captcha_browser = AsyncMock(return_value=True)
         await poller.process_search(search, notify=True)
         self.bot.send_message.assert_awaited_once()
         self.assertEqual(self.bot.send_message.await_args.args[0], 42)
+
+    async def test_manual_captcha_link_prepares_browser_before_sending(self):
+        poller = PollerService(
+            self.bot,
+            self.db,
+            credentials=None,
+            interval_sec=300,
+            etsy_vnc_access=FakeAccess(),
+        )
+        poller._prepare_etsy_captcha_browser = AsyncMock(return_value=True)
+
+        url = await poller.send_etsy_captcha_link(42)
+
+        self.assertEqual(url, "https://example.com/ticket")
+        poller._prepare_etsy_captcha_browser.assert_awaited_once()
+        self.bot.send_message.assert_awaited_once()
+
+    async def test_manual_captcha_link_is_not_sent_without_browser(self):
+        poller = PollerService(
+            self.bot,
+            self.db,
+            credentials=None,
+            interval_sec=300,
+            etsy_vnc_access=FakeAccess(),
+        )
+        poller._prepare_etsy_captcha_browser = AsyncMock(return_value=False)
+
+        url = await poller.send_etsy_captcha_link(42)
+
+        self.assertIsNone(url)
+        self.assertNotIn(
+            "reply_markup",
+            self.bot.send_message.await_args.kwargs,
+        )
 
     async def test_etsy_timeout_restarts_browser_and_returns(self):
         provider = HangingProvider()

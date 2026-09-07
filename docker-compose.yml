@@ -19,7 +19,9 @@ services:
     mem_limit: 1400m
     mem_reservation: 512m
     cpus: 0.90
-    pids_limit: 256
+    # Chromium создаёт много потоков; запас предотвращает отказ posix_spawn
+    # после восстановления браузера/noVNC.
+    pids_limit: 512
     expose:
       - "8080"
       - "6080"

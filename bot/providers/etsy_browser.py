@@ -231,15 +231,56 @@ async def fetch_search_html(url: str, *, proxy: str | None = None) -> str:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            if attempt == 0 and _is_browser_failure_error(exc):
+            if _is_browser_failure_error(exc):
                 logger.warning(
                     "Etsy browser crashed during navigation; restarting",
                     exc_info=True,
                 )
                 await restart_browser(reason=str(exc)[:200])
-                continue
+                if attempt == 0:
+                    continue
             raise
     raise EtsyBrowserError("Браузер Etsy не восстановился после перезапуска")
+
+
+async def prepare_captcha_browser(*, proxy: str | None = None) -> None:
+    """Гарантирует, что перед выдачей noVNC-ссылки открыт браузер Etsy."""
+    global _page, _idle_close_task
+    idle_task = _idle_close_task
+    _idle_close_task = None
+    if idle_task is not None and idle_task is not asyncio.current_task():
+        idle_task.cancel()
+
+    for attempt in range(2):
+        try:
+            context = await _get_context(proxy=proxy)
+            async with _navigation_lock:
+                if _page is None or _page.is_closed():
+                    _page = await context.new_page()
+                if "etsy.com" not in (_page.url or "").lower():
+                    try:
+                        await _page.goto(
+                            "https://www.etsy.com/",
+                            wait_until="domcontentloaded",
+                            timeout=30_000,
+                        )
+                    except Exception:
+                        # Даже при timeout страница и CAPTCHA обычно уже видны в noVNC.
+                        if _page.is_closed():
+                            raise
+                        logger.warning(
+                            "Etsy start page did not finish loading before noVNC access",
+                            exc_info=True,
+                        )
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if _is_browser_failure_error(exc):
+                await restart_browser(reason=f"CAPTCHA browser startup: {str(exc)[:160]}")
+                if attempt == 0:
+                    continue
+            raise
 
 
 def _schedule_idle_close() -> None:
