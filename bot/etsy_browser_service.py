@@ -234,8 +234,8 @@ async def _control_handler(
             )
             return
         if method == "POST" and path == "/restart":
-            await _write_response(writer, "202 Accepted", {"ok": True})
             restart_event.set()
+            await _write_response(writer, "202 Accepted", {"ok": True})
             return
         await _write_response(writer, "404 Not Found", {"ok": False})
     except Exception:
