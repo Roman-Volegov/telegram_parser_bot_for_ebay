@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 logger = logging.getLogger(__name__)
@@ -49,11 +51,35 @@ def _internal_request(
     *,
     method: str = "GET",
     timeout: float = 3,
+    headers: dict[str, str] | None = None,
 ) -> bytes:
     opener = build_opener(ProxyHandler({}))
-    request = Request(url, method=method)
+    request = Request(url, method=method, headers=headers or {})
     with opener.open(request, timeout=timeout) as response:
         return response.read()
+
+
+async def _remote_websocket_url(remote_url: str) -> str:
+    payload = await asyncio.to_thread(
+        _internal_request,
+        f"{remote_url}/json/version",
+        timeout=3,
+        headers={"Host": "localhost:9224"},
+    )
+    debugger_url = str(json.loads(payload).get("webSocketDebuggerUrl") or "")
+    debugger = urlsplit(debugger_url)
+    remote = urlsplit(remote_url)
+    if not debugger.path or not remote.netloc:
+        raise RuntimeError("Remote Chromium returned an invalid debugger URL")
+    return urlunsplit(
+        (
+            "wss" if remote.scheme == "https" else "ws",
+            remote.netloc,
+            debugger.path,
+            debugger.query,
+            "",
+        )
+    )
 
 
 def _headless() -> bool:
@@ -201,8 +227,9 @@ async def _get_context(*, proxy: str | None = None):
             last_error: BaseException | None = None
             while asyncio.get_running_loop().time() < deadline:
                 try:
+                    websocket_url = await _remote_websocket_url(remote_url)
                     _browser = await _playwright.chromium.connect_over_cdp(
-                        remote_url,
+                        websocket_url,
                         timeout=5_000,
                     )
                     if not _browser.contexts:

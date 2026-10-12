@@ -180,11 +180,24 @@ async def _cdp_proxy_handler(
     client_writer: asyncio.StreamWriter,
 ) -> None:
     try:
+        request_headers = await asyncio.wait_for(
+            client_reader.readuntil(b"\r\n\r\n"),
+            timeout=5,
+        )
+        lines = request_headers.split(b"\r\n")
+        request_headers = b"\r\n".join(
+            b"Host: localhost:9224"
+            if line.lower().startswith(b"host:")
+            else line
+            for line in lines
+        )
         upstream_reader, upstream_writer = await asyncio.open_connection(
             "127.0.0.1",
             9224,
         )
-    except OSError:
+        upstream_writer.write(request_headers)
+        await upstream_writer.drain()
+    except (OSError, TimeoutError, asyncio.IncompleteReadError):
         client_writer.close()
         await client_writer.wait_closed()
         return

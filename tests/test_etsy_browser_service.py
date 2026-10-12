@@ -7,6 +7,7 @@ from bot.etsy_browser_service import (
     _watch_resources,
     pid_threshold_reached,
 )
+from bot.providers.etsy_browser import _remote_websocket_url
 
 
 class EtsyBrowserServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -49,6 +50,24 @@ class EtsyBrowserServiceTests(unittest.IsolatedAsyncioTestCase):
             await _watch_resources(restart_event)
 
         self.assertTrue(restart_event.is_set())
+
+    async def test_remote_debugger_url_uses_browser_service_host(self):
+        payload = (
+            b'{"webSocketDebuggerUrl":'
+            b'"ws://localhost:9224/devtools/browser/browser-id"}'
+        )
+        with patch(
+            "bot.providers.etsy_browser._internal_request",
+            return_value=payload,
+        ):
+            result = await _remote_websocket_url(
+                "http://etsy-browser:9222"
+            )
+
+        self.assertEqual(
+            result,
+            "ws://etsy-browser:9222/devtools/browser/browser-id",
+        )
 
 
 if __name__ == "__main__":
