@@ -4,6 +4,7 @@ name: ebay-poshmark-bot
 services:
   bot:
     build: .
+    image: ebay-poshmark-bot-app:latest
     container_name: ebay-poshmark-bot
     init: true
     restart: unless-stopped
@@ -53,7 +54,7 @@ services:
         max-file: "3"
 
   etsy-browser:
-    build: .
+    image: ebay-poshmark-bot-app:latest
     container_name: ebay-poshmark-etsy-browser
     init: true
     restart: unless-stopped
