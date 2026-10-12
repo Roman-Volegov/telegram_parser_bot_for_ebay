@@ -22,7 +22,7 @@ https://{$MINIAPP_DOMAIN} {
 			header_up -Connection
 			header_up -Upgrade
 		}
-		reverse_proxy bot:6080
+		reverse_proxy etsy-browser:6080
 	}
 
 	handle /app* {

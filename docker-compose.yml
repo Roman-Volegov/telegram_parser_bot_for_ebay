@@ -5,40 +5,37 @@ services:
   bot:
     build: .
     container_name: ebay-poshmark-bot
+    init: true
     restart: unless-stopped
     stop_grace_period: 30s
     depends_on:
       redis:
         condition: service_healthy
+      etsy-browser:
+        condition: service_healthy
     env_file:
       - .env
     volumes:
       - ebay_bot_data:/app/data
-    # Chromium (Playwright) нужен shared memory
-    shm_size: "512mb"
-    mem_limit: 1400m
+    mem_limit: 900m
     mem_reservation: 512m
-    cpus: 0.90
-    # Chromium создаёт много потоков; запас предотвращает отказ posix_spawn
-    # после восстановления браузера/noVNC.
-    pids_limit: 512
+    cpus: 0.75
+    pids_limit: 256
     expose:
       - "8080"
-      - "6080"
     environment:
       DATABASE_PATH: /app/data/bot.db
       WEB_HOST: 0.0.0.0
       WEB_PORT: 8080
       REDIS_URL: redis://redis:6379/0
-      ETSY_BROWSER_HEADLESS: "false"
-      ETSY_BROWSER_PROFILE_DIR: /app/data/etsy-browser-profile
+      ETSY_BROWSER_RUNTIME: "disabled"
+      ETSY_BROWSER_CDP_URL: http://etsy-browser:9222
+      ETSY_BROWSER_CONTROL_URL: http://etsy-browser:9223
       ETSY_NOVNC_TOKEN: ${ETSY_NOVNC_TOKEN:?Set ETSY_NOVNC_TOKEN in .env}
       ETSY_NOVNC_TTL_SEC: ${ETSY_NOVNC_TTL_SEC:-43200}
     # прямой доступ оставляем на 18080 (HTTP) для отладки/health
     ports:
       - "127.0.0.1:18080:8080"
-      # Только через SSH-туннель: localhost:16080 -> noVNC контейнера
-      - "127.0.0.1:16080:6080"
     healthcheck:
       test:
         - CMD
@@ -49,6 +46,52 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  etsy-browser:
+    build: .
+    container_name: ebay-poshmark-etsy-browser
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    command: ["python", "-m", "bot.etsy_browser_service"]
+    volumes:
+      # Сохраняем существующий профиль/cookies; browser-сервис не обращается к БД.
+      - ebay_bot_data:/app/data
+    shm_size: "512mb"
+    mem_limit: 700m
+    mem_reservation: 384m
+    cpus: 0.60
+    pids_limit: 512
+    environment:
+      ETSY_BROWSER_RUNTIME: "managed"
+      ETSY_BROWSER_PROFILE_DIR: /app/data/etsy-browser-profile
+      ETSY_BROWSER_PROXY: ${HTTP_PROXY:-}
+      ETSY_BROWSER_PID_THRESHOLD_PERCENT: "80"
+      ETSY_BROWSER_PID_THRESHOLD_CHECKS: "3"
+      ETSY_BROWSER_WATCH_INTERVAL_SEC: "5"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    expose:
+      - "6080"
+      - "9222"
+      - "9223"
+    # Только локальная диагностика noVNC через SSH-туннель.
+    ports:
+      - "127.0.0.1:16080:6080"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9223/health', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
     logging:
       driver: json-file
       options:
@@ -82,6 +125,8 @@ services:
     restart: unless-stopped
     depends_on:
       bot:
+        condition: service_healthy
+      etsy-browser:
         condition: service_healthy
     mem_limit: 128m
     cpus: 0.20

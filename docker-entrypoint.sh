@@ -6,6 +6,10 @@ DISPLAY_ID="${DISPLAY_NUMBER#:}"
 SCREEN_SIZE="${ETSY_SCREEN_SIZE:-1368x900x24}"
 PROFILE_DIR="${ETSY_BROWSER_PROFILE_DIR:-/app/data/etsy-browser-profile}"
 
+if [ "${ETSY_BROWSER_RUNTIME:-local}" = "disabled" ]; then
+    exec "$@"
+fi
+
 case "$DISPLAY_ID" in
     *[!0-9]*|'')
         echo "Invalid DISPLAY value: $DISPLAY_NUMBER" >&2

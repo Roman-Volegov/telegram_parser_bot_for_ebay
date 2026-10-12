@@ -6,12 +6,14 @@ import os
 import signal
 from pathlib import Path
 from typing import Any
+from urllib.request import ProxyHandler, Request, build_opener
 
 logger = logging.getLogger(__name__)
 
 _lock = asyncio.Lock()
 _navigation_lock = asyncio.Lock()
 _playwright: Any = None
+_browser: Any = None
 _context: Any = None
 _page: Any = None
 _context_proxy: str | None = None
@@ -19,6 +21,7 @@ _html_cache: dict[str, tuple[float, str]] = {}
 _idle_close_task: asyncio.Task[None] | None = None
 HTML_CACHE_TTL_SEC = 60
 DEFAULT_IDLE_CLOSE_SEC = 90
+REMOTE_CONNECT_TIMEOUT_SEC = 30
 
 
 class EtsyBrowserError(RuntimeError):
@@ -27,6 +30,30 @@ class EtsyBrowserError(RuntimeError):
     def __init__(self, message: str, *, needs_human: bool = False) -> None:
         super().__init__(message)
         self.needs_human = needs_human
+
+
+def _remote_cdp_url() -> str:
+    return os.getenv("ETSY_BROWSER_CDP_URL", "").strip().rstrip("/")
+
+
+def _remote_control_url() -> str:
+    return os.getenv("ETSY_BROWSER_CONTROL_URL", "").strip().rstrip("/")
+
+
+def _uses_remote_browser() -> bool:
+    return bool(_remote_cdp_url())
+
+
+def _internal_request(
+    url: str,
+    *,
+    method: str = "GET",
+    timeout: float = 3,
+) -> bytes:
+    opener = build_opener(ProxyHandler({}))
+    request = Request(url, method=method)
+    with opener.open(request, timeout=timeout) as response:
+        return response.read()
 
 
 def _headless() -> bool:
@@ -86,6 +113,8 @@ def _is_browser_failure_error(exc: BaseException) -> bool:
             "browser closed",
             "connection closed",
             "connection is closed",
+            "econnrefused",
+            "connect_over_cdp",
         )
     )
 
@@ -142,26 +171,65 @@ async def _terminate_playwright_processes() -> None:
 
 
 async def _get_context(*, proxy: str | None = None):
-    global _playwright, _context, _page, _context_proxy
+    global _playwright, _browser, _context, _page, _context_proxy
     async with _lock:
         if _context is not None:
-            browser = _context.browser
+            context_browser = _context.browser
             if (
-                browser is not None
-                and browser.is_connected()
-                and _context_proxy == proxy
+                context_browser is not None
+                and context_browser.is_connected()
+                and (_uses_remote_browser() or _context_proxy == proxy)
             ):
                 return _context
-            try:
-                await asyncio.wait_for(_context.close(), timeout=5)
-            except Exception:
-                logger.debug("Stale Etsy browser close failed", exc_info=True)
+            if not _uses_remote_browser():
+                try:
+                    await asyncio.wait_for(_context.close(), timeout=5)
+                except Exception:
+                    logger.debug("Stale Etsy browser close failed", exc_info=True)
+            _browser = None
             _context = None
             _page = None
         from playwright.async_api import async_playwright
 
         if _playwright is None:
             _playwright = await async_playwright().start()
+        remote_url = _remote_cdp_url()
+        if remote_url:
+            deadline = (
+                asyncio.get_running_loop().time() + REMOTE_CONNECT_TIMEOUT_SEC
+            )
+            last_error: BaseException | None = None
+            while asyncio.get_running_loop().time() < deadline:
+                try:
+                    _browser = await _playwright.chromium.connect_over_cdp(
+                        remote_url,
+                        timeout=5_000,
+                    )
+                    if not _browser.contexts:
+                        raise RuntimeError("Remote Chromium has no default context")
+                    _context = _browser.contexts[0]
+                    _context_proxy = None
+                    await _context.add_init_script(
+                        "Object.defineProperty(navigator, 'webdriver', "
+                        "{get: () => undefined});"
+                    )
+                    _page = (
+                        _context.pages[0]
+                        if _context.pages
+                        else await _context.new_page()
+                    )
+                    logger.info("Connected to remote Etsy Chromium at %s", remote_url)
+                    return _context
+                except Exception as exc:
+                    last_error = exc
+                    _browser = None
+                    _context = None
+                    _page = None
+                    await asyncio.sleep(0.5)
+            raise EtsyBrowserError(
+                f"Не удалось подключиться к браузеру Etsy: {last_error}"
+            ) from last_error
+
         profile_dir = _profile_dir()
         profile_dir.mkdir(parents=True, exist_ok=True)
         launch_kwargs: dict[str, Any] = {
@@ -341,13 +409,39 @@ async def _fetch_search_html_once(url: str, *, proxy: str | None = None) -> str:
 
 
 async def restart_browser(*, reason: str = "") -> None:
-    global _playwright, _context, _page, _context_proxy, _idle_close_task
+    global _playwright, _browser, _context, _page, _context_proxy, _idle_close_task
     if reason:
         logger.warning("Restarting Etsy browser: %s", reason)
     idle_task = _idle_close_task
     _idle_close_task = None
     if idle_task is not None and idle_task is not asyncio.current_task():
         idle_task.cancel()
+    if _uses_remote_browser():
+        async with _lock:
+            _browser = None
+            _context = None
+            _page = None
+            _context_proxy = None
+            _html_cache.clear()
+        control_url = _remote_control_url()
+        if not control_url:
+            raise EtsyBrowserError("ETSY_BROWSER_CONTROL_URL is not configured")
+        try:
+            await asyncio.to_thread(
+                _internal_request,
+                f"{control_url}/restart",
+                method="POST",
+                timeout=5,
+            )
+        except Exception:
+            # Контейнер мог уже перезапускаться после watchdog/OOM.
+            logger.warning(
+                "Remote Etsy browser restart request failed; waiting for recovery",
+                exc_info=True,
+            )
+        await asyncio.sleep(0.5)
+        logger.info("Remote Etsy browser restart requested")
+        return
     async with _lock:
         context = _context
         playwright = _playwright
@@ -396,9 +490,36 @@ async def close_browser_if_no_captcha(*, reason: str) -> bool:
                     return False
             except Exception:
                 logger.debug("Failed to inspect Etsy page before close", exc_info=True)
+        if _uses_remote_browser():
+            if page is not None and not page.is_closed():
+                try:
+                    await page.goto("about:blank", timeout=5_000)
+                except Exception:
+                    logger.debug(
+                        "Failed to release remote Etsy page after idle",
+                        exc_info=True,
+                    )
+            _html_cache.clear()
+            logger.info("Remote Etsy browser page released after idle: %s", reason)
+            return True
         await restart_browser(reason=reason)
         return True
 
 
 async def close_browser() -> None:
+    global _playwright, _browser, _context, _page, _context_proxy
+    if _uses_remote_browser():
+        async with _lock:
+            _browser = None
+            _context = None
+            _page = None
+            _context_proxy = None
+            _html_cache.clear()
+            if _playwright is not None:
+                try:
+                    await asyncio.wait_for(_playwright.stop(), timeout=5)
+                except Exception:
+                    logger.debug("Playwright stop failed", exc_info=True)
+                _playwright = None
+        return
     await restart_browser(reason="application shutdown")
