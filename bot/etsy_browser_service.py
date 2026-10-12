@@ -59,7 +59,7 @@ def _oom_kill_count() -> int:
 
 async def _wait_cdp_ready(timeout_sec: float = 30) -> None:
     deadline = asyncio.get_running_loop().time() + timeout_sec
-    url = "http://127.0.0.1:9222/json/version"
+    url = "http://127.0.0.1:9224/json/version"
     opener = build_opener(ProxyHandler({}))
     while asyncio.get_running_loop().time() < deadline:
         try:
@@ -84,7 +84,7 @@ async def _start_chromium() -> asyncio.subprocess.Process:
     args = [
         str(_chromium_executable()),
         "--remote-debugging-address=0.0.0.0",
-        "--remote-debugging-port=9222",
+        "--remote-debugging-port=9224",
         "--remote-allow-origins=*",
         f"--user-data-dir={profile_dir}",
         "--disable-blink-features=AutomationControlled",
@@ -155,6 +155,43 @@ async def _write_response(
     await writer.drain()
     writer.close()
     await writer.wait_closed()
+
+
+async def _proxy_stream(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+) -> None:
+    try:
+        while data := await reader.read(64 * 1024):
+            writer.write(data)
+            await writer.drain()
+    except (ConnectionError, asyncio.CancelledError):
+        pass
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except ConnectionError:
+            pass
+
+
+async def _cdp_proxy_handler(
+    client_reader: asyncio.StreamReader,
+    client_writer: asyncio.StreamWriter,
+) -> None:
+    try:
+        upstream_reader, upstream_writer = await asyncio.open_connection(
+            "127.0.0.1",
+            9224,
+        )
+    except OSError:
+        client_writer.close()
+        await client_writer.wait_closed()
+        return
+    await asyncio.gather(
+        _proxy_stream(client_reader, upstream_writer),
+        _proxy_stream(upstream_reader, client_writer),
+    )
 
 
 async def _control_handler(
@@ -261,6 +298,11 @@ async def main() -> None:
         "0.0.0.0",
         9223,
     )
+    cdp_proxy = await asyncio.start_server(
+        _cdp_proxy_handler,
+        "0.0.0.0",
+        9222,
+    )
     watchdog = asyncio.create_task(
         _watch_resources(restart_event),
         name="browser-resource-watchdog",
@@ -278,7 +320,9 @@ async def main() -> None:
             )
     finally:
         server.close()
+        cdp_proxy.close()
         await server.wait_closed()
+        await cdp_proxy.wait_closed()
         watchdog.cancel()
         process_wait.cancel()
         restart_wait.cancel()
